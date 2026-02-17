@@ -1,52 +1,37 @@
-import sys
-import os
-from pathlib import Path
 import cv2
+import configs.settings as settings
 
-# Get root dir
-BASE_DIR = Path(__file__).resolve().parent.parent
-# print("Dir: ", BASE_DIR)
-
-# Add root dir into system dir
-sys.path.append(str(BASE_DIR))
-
-from src.services.ai_service import ObjectDetector
+from src.services.model_detector import ObjectDetector
 
 def load_model_test():
-    model_path = os.path.join(BASE_DIR, "models", "bestyolo11n.pt")
-    # print("Load model at: ", model_path)
-
     try:
-        testing = ObjectDetector(model_path)
-        return testing
+        model_loaded = ObjectDetector(settings.MODEL_PATH, conf=0.25)
+        return model_loaded
     except Exception as e:
         print("Error", e)
 
-def run_model_test(detector):
-    # Input image path
-    img_path = os.path.join(BASE_DIR, "assets", "images", "test.jpg")
-
-    # Output dir
-    output_dir = os.path.join(BASE_DIR, "tests", "result")
+def run_model_test(detector, frame):
     
-    # Output image path
-    img_result_path = os.path.join(output_dir, "result_image.jpg")
-
-    frame = cv2.imread(img_path)
-
     # Use model to detect objects
     result = detector.predict(frame)
-    
+
     # Get the image with mask and bounding box
-    predicted_image = result[0].plot()
+    predicted_image = result[0].plot(boxes=False, masks=True)
 
-    saving = cv2.imwrite(img_result_path, predicted_image)
+    # Save the predicted image
+    saving = cv2.imwrite(str(settings.IMAGE_TEST_RESULT_PATH), predicted_image)
 
+    # Optionally track detections
+    processor = ObjectDetector(settings.MODEL_PATH)
+    detections = processor.track(frame)
+    print(detections)
 
 
 
 if __name__ == "__main__":
     model_detector = load_model_test()
-    run_model_test(model_detector)
+    # Example: read frame from file or camera
+    frame = cv2.imread(str(settings.IMAGE_TEST_PATH))
+    run_model_test(model_detector, frame)
 
 

@@ -1,0 +1,5 @@
+ultralytics
+opencv-python
+PyQt6
+numpy
+openvino

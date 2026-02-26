@@ -1,7 +1,7 @@
 import cv2
 import configs.settings as settings
 
-from src.services.model_detector import ObjectDetector
+from src.services.detector import ObjectDetector
 
 def load_model_test():
     try:

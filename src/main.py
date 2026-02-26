@@ -1,31 +1,35 @@
-import os
-import cv2
+"""
+Entry point của ứng dụng.
+Khởi tạo QApplication, các service (AI, Adapter) và cửa sổ chính (MainWindow).
+"""
+
+import sys
+from PyQt6.QtWidgets import QApplication
 
 import configs.settings as settings
-import src.utils.video_reader as vr
-
-from src.services.display_service import DisplayService
 from src.services.ai_service import AIService
+from src.utils.qt_helpers import QtDisplayAdapter
+from src.views.main_window import MainWindow
 
-# from src.utils.draw_line import LineDrawer
-# from src.utils import input_processor as input_p
-
-# from src.services.ai_service import AIService
-# from src.services.counter_service import CounterService
 
 def main():
-    for f in os.listdir(settings.CACHE_DIR):
-        if f.lower().endswith(settings.VALID_EXTENSION):
-            os.remove(os.path.join(settings.CACHE_DIR, f))
+    app = QApplication(sys.argv)
 
-    first_frame = vr.extract_frames(settings.VIDEO_TEST_PATH, settings.MAX_FPS)
-    if first_frame is None:
-        print("Không đọc được video.")
-        return
-    
-    ai_ser = AIService(settings.MODEL_PATH, settings.VIDEO_TEST_PATH, 15)
-    ai_ser.detect_and_track()
+    # Adapter: Cầu nối gửi ảnh từ AI thread sang UI thread
+    adapter = QtDisplayAdapter()
 
-    
+    # AIService: Quản lý logic AI (detect, track, count)
+    ai_service = AIService(
+        settings.MODEL_PATH,
+        display_handler=adapter
+    )
+
+    # MainWindow: Giao diện chính
+    window = MainWindow(ai_service, adapter)
+    window.show()
+
+    sys.exit(app.exec())
+
+
 if __name__ == "__main__":
     main()

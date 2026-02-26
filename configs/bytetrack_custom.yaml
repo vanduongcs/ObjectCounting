@@ -1,0 +1,19 @@
+# ByteTrack Tracker Configuration (tùy chỉnh cho ứng dụng đếm)
+# Tham khảo: ultralytics/cfg/trackers/bytetrack.yaml
+
+tracker_type: bytetrack   # Loại tracker
+
+# Thresholds
+track_high_thresh: 0.5    # Ngưỡng detection cao (track đáng tin cậy)
+track_low_thresh: 0.1     # Ngưỡng detection thấp (re-attach lost tracks)
+new_track_thresh: 0.6     # Ngưỡng để tạo track mới
+
+# Lifecycle
+track_buffer: 30          # Số frame giữ track khi mất (~1 giây ở 30FPS)
+match_thresh: 0.8         # Ngưỡng IoU để ghép detection với track
+
+# Các tham số bổ sung bắt buộc
+fuse_score: true          # Kết hợp confidence score vào IoU khi ghép track
+aspect_ratio_thresh: 10.0 # Tỷ lệ chiều dài/rộng tối đa
+min_box_area: 10          # Diện tích box tối thiểu (pixel²)
+with_reid: false          # Không dùng ReID

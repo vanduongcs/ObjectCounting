@@ -1,36 +1,49 @@
 """
-Result Parser: Xử lý kết quả trả về từ YOLO.
+Result Parser: Chuyển kết quả YOLO track thành list[dict] đơn giản.
 
-Chuyển đổi các object phức tạp của Ultralytics thành mảng dictionary đơn giản để dễ xử lý.
+Ai gọi module này?
+    - ObjectDetector.track() (services/detector.py) gọi parse_tracking_results()
+
+Ai dùng kết quả?
+    - CounterService.update() (services/counter_service.py) dùng để đếm.
+
+Tại sao cần parse?
+    Kết quả gốc của YOLO là object phức tạp (tensors, nhiều thuộc tính).
+    Module này rút trích chỉ 4 thông tin cần thiết cho việc đếm:
+        - id: Track ID (để theo dõi vật thể qua các frame)
+        - label: Loại đối tượng (0=person, 1=car, ...)
+        - conf: Độ tin cậy (0.0 -> 1.0)
+        - center: Tâm bounding box (cx, cy)
 """
+
 
 def parse_tracking_results(results):
     """
-    Rút trích các thông tin cần thiết từ kết quả YOLO track.
-    Trả về list[dict]:
-        - id: ID tracking (số nguyên, duy nhất cho mỗi đối tượng)
-        - label: Class ID (số nguyên, loại đối tượng)
-        - conf: Confidence score (0.0 → 1.0, độ tin cậy)
-        - center: Tọa độ tâm (cx, cy)
+    Rút trích thông tin cần thiết từ kết quả YOLO track.
+
+    Args:
+        results: Kết quả gốc từ YOLO model.track() -- list các Result object.
+
+    Returns:
+        list[dict] -- mỗi dict chứa: id, label, conf, center.
+        Ví dụ: [{"id": 5, "label": 0, "conf": 0.85, "center": (320.5, 240.1)}]
     """
     detections = []
-
     for result in results:
         boxes = result.boxes
+
+        # Nếu chưa có track ID (frame đầu hoặc tracking lỗi) -> bỏ qua
         if boxes.id is None:
             continue
 
         for box in boxes:
-            track_id = int(box.id.item())       # ID theo dõi
-            cls_id = int(box.cls.item())         # Loại đối tượng
-            conf = float(box.conf.item())        # Độ tin cậy
-            cx, cy, w, h = box.xywh[0]           # Tâm + kích thước (YOLO tính sẵn)
-
+            # xywh = [center_x, center_y, width, height]
+            cx, cy, w, h = box.xywh[0]
             detections.append({
-                "id": track_id,
-                "label": cls_id,
-                "conf": conf,
-                "center": (float(cx), float(cy)),
+                "id": int(box.id.item()),       # Track ID (ByteTrack gán)
+                "label": int(box.cls.item()),   # Class ID (0, 1, 2, ...)
+                "conf": float(box.conf.item()), # Confidence score
+                "center": (float(cx), float(cy)),  # Tâm bbox
+                "bbox_wh": (float(w), float(h)),   # Kích thước bbox (cho stitcher)
             })
-
     return detections

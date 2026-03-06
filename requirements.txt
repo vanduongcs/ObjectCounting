@@ -1,5 +1,5 @@
-ultralytics
-opencv-python
-PyQt6
-numpy
-openvino
+ultralytics>=8.0.0,<9.0.0
+opencv-python>=4.8.0,<5.0.0
+PyQt6>=6.5.0,<7.0.0
+numpy>=1.24.0,<3.0.0
+openvino>=2023.1.0

@@ -1,12 +1,19 @@
 """
-Video Service: Các hàm tiện ích xử lý video.
+Video Service: Tiện ích chọn video và khởi tạo trích xuất frame.
 
-- Chọn file video.
-- Lấy frame đầu tiên (preview).
-- Khởi tạo luồng trích xuất frame.
+Ai gọi module này?
+    - MainWindow (views/main_window.py) gọi khi user chọn video hoặc bấm "Bắt đầu".
+
+Module này gọi ai?
+    - FrameExtractionThread (services/frame_extractor.py) -- tạo thread trích xuất frame.
+    - configs.settings -- lấy BASE_DIR, MAX_QUEUE_SIZE.
+
+Các function:
+    select_video_file() -- mở dialog chọn file     -- gọi bởi MainWindow.start_choosing()
+    get_first_frame()   -- lấy frame preview       -- gọi bởi MainWindow.setup_video()
+    start_extraction()  -- tạo thread + queue      -- gọi bởi MainWindow.start_processing()
 """
 
-import os
 import queue
 import cv2
 from PyQt6.QtWidgets import QFileDialog
@@ -16,18 +23,16 @@ from src.services.frame_extractor import FrameExtractionThread
 
 
 def select_video_file():
-    """Mở hộp thoại chọn file video."""
+    """Mở hộp thoại chọn file video. Trả về path hoặc None."""
     file_path, _ = QFileDialog.getOpenFileName(
-        None,
-        "Chọn Video",
-        str(settings.BASE_DIR),
-        "Video Files (*.mp4)"
+        None, "Chọn Video", str(settings.BASE_DIR),
+        "Video Files (*.mp4 *.avi *.mkv *.mov);;All Files (*)"
     )
     return file_path or None
 
 
 def get_first_frame(video_path):
-    """Lấy frame đầu tiên của video để hiển thị preview."""
+    """Lấy frame đầu tiên của video để hiển thị preview trên UI."""
     cap = cv2.VideoCapture(video_path)
     ret, frame = cap.read()
     cap.release()
@@ -36,22 +41,15 @@ def get_first_frame(video_path):
 
 def start_extraction(video_path):
     """
-    Khởi tạo Queue và Thread trích xuất frame.
-    Trả về (thread, queue).
+    Khởi tạo Queue + Thread trích xuất frame.
+
+    Tạo mô hình Producer-Consumer:
+        FrameExtractionThread (Producer) -> Queue -> AIService (Consumer)
+
+    Returns:
+        (thread, queue) -- MainWindow giữ reference để điều khiển (pause/stop/set_fps).
     """
-    # Dọn dẹp cache cũ nếu có
-    try:
-        if os.path.exists(settings.CACHE_DIR):
-            for f in os.listdir(settings.CACHE_DIR):
-                if f.lower().endswith(settings.VALID_EXTENSION):
-                    os.remove(os.path.join(settings.CACHE_DIR, f))
-    except Exception as e:
-        print(f"Lỗi dọn cache: {e}")
-
-    # Tạo Queue mới
     frame_queue = queue.Queue(maxsize=settings.MAX_QUEUE_SIZE)
-    # Khởi tạo Thread
-    extraction_thread = FrameExtractionThread(video_path, frame_queue=frame_queue)
-    extraction_thread.start()
-
-    return extraction_thread, frame_queue
+    thread = FrameExtractionThread(video_path, frame_queue=frame_queue)
+    thread.start()
+    return thread, frame_queue

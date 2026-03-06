@@ -1,58 +1,88 @@
 """
-Utils: Xử lý vẽ vạch ảo và overlay vùng Nhập/Xuất.
+Utils: Vẽ vạch ảo + mũi tên NHẬP/XUẤT lên ảnh.
+
+Gồm 3 chức năng:
+    1. extend_line            -- Kéo dài đoạn thẳng ra 2 mép ảnh
+    2. calculate_virtual_line -- Chuyển tọa độ UI -> ảnh gốc -> extend
+    3. draw_line_with_arrows  -- Vẽ vạch ảo + 2 mũi tên vuông góc NHẬP/XUẤT
 """
 
 import cv2
 import numpy as np
 
+import configs.settings as settings
+
+
+def _distance_squared(point_a, point_b):
+    """Bình phương khoảng cách giữa 2 điểm (dùng để so sánh, không cần sqrt)."""
+    return (point_a[0] - point_b[0]) ** 2 + (point_a[1] - point_b[1]) ** 2
+
 
 def extend_line(p1, p2, width, height):
     """
-    Kéo dài đoạn thẳng p1-p2 ra 2 mép ảnh.
-    Giữ nguyên hướng vẽ ban đầu (vector p1->p2).
+    Kéo dài đoạn thẳng p1->p2 ra 2 mép ảnh (giữ nguyên hướng vector).
+
+    Minh họa:
+        +------------------+
+        |        /         |
+        |  p1  /           |   -> Kéo dài thành đường nối 2 mép ảnh
+        |    /  p2         |
+        |  /               |
+        +------------------+
+
+    Cách hoạt động:
+        1. Tính phương trình đường thẳng: y = slope * x + y_intercept
+        2. Tìm giao điểm với 4 cạnh ảnh (trái, phải, trên, dưới)
+        3. Chọn 2 giao điểm gần p1 và p2 nhất
+
+    Returns:
+        (start, end) hoặc None nếu 2 điểm trùng nhau.
     """
     x1, y1 = p1
     x2, y2 = p2
 
+    # Hai điểm trùng nhau -> không thể tạo đường thẳng
     if x1 == x2 and y1 == y2:
         return None
 
-    # Trường hợp đặc biệt: đường thẳng đứng hoặc ngang
+    # Trường hợp đặc biệt: đường thẳng dọc hoặc ngang
     if x1 == x2:
         return ((x1, 0), (x1, height))
     if y1 == y2:
         return ((0, y1), (width, y1))
 
-    # Tính phương trình đường thẳng y = mx + c
-    m = (y2 - y1) / (x2 - x1)
-    c = y1 - m * x1
+    # Phương trình đường thẳng: y = slope * x + y_intercept
+    slope = (y2 - y1) / (x2 - x1)
+    y_intercept = y1 - slope * x1
 
     # Tìm giao điểm với 4 cạnh ảnh
-    points = []
-    
-    # Giao với cạnh trái (x=0) và phải (x=width)
-    y_left = int(c)
-    if 0 <= y_left <= height: points.append((0, y_left))
-    
-    y_right = int(m * width + c)
-    if 0 <= y_right <= height: points.append((width, y_right))
+    intersections = []
 
-    if m != 0:
-        # Giao với cạnh trên (y=0) và dưới (y=height)
-        x_top = int(-c / m)
-        if 0 <= x_top <= width: points.append((x_top, 0))
-        
-        x_bot = int((height - c) / m)
-        if 0 <= x_bot <= width: points.append((x_bot, height))
+    # Giao với cạnh trái (x = 0)
+    y_at_left = int(y_intercept)
+    if 0 <= y_at_left <= height:
+        intersections.append((0, y_at_left))
 
-    def distance_squared(pt1, pt2):
-        return (pt1[0] - pt2[0])**2 + (pt1[1] - pt2[1])**2
+    # Giao với cạnh phải (x = width)
+    y_at_right = int(slope * width + y_intercept)
+    if 0 <= y_at_right <= height:
+        intersections.append((width, y_at_right))
 
-    unique_points = list(set(points))
+    # Giao với cạnh trên (y = 0) và cạnh dưới (y = height)
+    if slope != 0:
+        x_at_top = int(-y_intercept / slope)
+        if 0 <= x_at_top <= width:
+            intersections.append((x_at_top, 0))
+
+        x_at_bottom = int((height - y_intercept) / slope)
+        if 0 <= x_at_bottom <= width:
+            intersections.append((x_at_bottom, height))
+
+    # Loại bỏ điểm trùng, chọn 2 điểm gần p1 và p2 nhất
+    unique_points = list(set(intersections))
     if len(unique_points) >= 2:
-        # Chọn điểm gần p1 nhất làm đầu, gần p2 nhất làm cuối để giữ hướng vector
-        start = min(unique_points, key=lambda p: distance_squared(p, p1))
-        end = min(unique_points, key=lambda p: distance_squared(p, p2))
+        start = min(unique_points, key=lambda p: _distance_squared(p, p1))
+        end = min(unique_points, key=lambda p: _distance_squared(p, p2))
         return (start, end)
 
     return None
@@ -60,87 +90,99 @@ def extend_line(p1, p2, width, height):
 
 def calculate_virtual_line(p1_ui, p2_ui, label_size, image_size):
     """
-    Chuyển đổi tọa độ từ UI (VideoLabel) sang tọa độ ảnh gốc.
-    Do ảnh hiển thị trên UI bị scale khác với ảnh gốc.
+    Chuyển tọa độ từ UI (VideoLabel) sang ảnh gốc, rồi extend ra mép.
+
+    Vì ảnh được scale để vừa VideoLabel (giữ tỷ lệ), tọa độ chuột trên UI
+    khác với tọa độ thực trên ảnh. Function này chuyển đổi ngược lại.
+
+    Args:
+        p1_ui, p2_ui: Tọa độ 2 đầu vạch trên VideoLabel (pixel).
+        label_size: Kích thước VideoLabel (width, height).
+        image_size: Kích thước ảnh gốc (width, height).
     """
-    w_lbl, h_lbl = label_size
-    w_img, h_img = image_size
+    label_w, label_h = label_size
+    img_w, img_h = image_size
 
-    # Tính tỷ lệ scale và padding
-    scale = min(w_lbl / w_img, h_lbl / h_img)
-    dx = (w_lbl - w_img * scale) / 2
-    dy = (h_lbl - h_img * scale) / 2
+    # Tính tỷ lệ scale và offset (khoảng trống do giữ tỷ lệ)
+    scale = min(label_w / img_w, label_h / img_h)
+    offset_x = (label_w - img_w * scale) / 2
+    offset_y = (label_h - img_h * scale) / 2
 
-    # Map ngược từ UI về ảnh gốc
+    # Chuyển tọa độ UI -> tọa độ ảnh gốc
     try:
-        p1_img = (int((p1_ui[0] - dx) / scale), int((p1_ui[1] - dy) / scale))
-        p2_img = (int((p2_ui[0] - dx) / scale), int((p2_ui[1] - dy) / scale))
+        p1_img = (int((p1_ui[0] - offset_x) / scale), int((p1_ui[1] - offset_y) / scale))
+        p2_img = (int((p2_ui[0] - offset_x) / scale), int((p2_ui[1] - offset_y) / scale))
     except ZeroDivisionError:
         return None
 
-    return extend_line(p1_img, p2_img, w_img, h_img)
+    return extend_line(p1_img, p2_img, img_w, img_h)
 
 
-def draw_region_overlay(image, line, nhap_color=(255, 0, 0), xuat_color=(255, 0, 255), alpha=0.1):
+def draw_line_with_arrows(image, line):
     """
-    Vẽ vùng Nhập (Xanh) và Xuất (Tím) bán trong suốt lên ảnh.
-    Chia ảnh thành 2 đa giác dựa trên đường vạch ảo.
-    
-    Thuật toán: Đi theo chu vi hình chữ nhật theo chiều kim đồng hồ.
-    Đường vạch chia chu vi thành 2 cung. Mỗi cung + đường vạch = 1 đa giác.
+    Vẽ vạch ảo + 2 mũi tên vuông góc chỉ hướng NHẬP/XUẤT.
+
+    Mũi tên NHẬP (xanh lá) chỉ về vùng cross > 0.
+    Mũi tên XUẤT (hồng)    chỉ về vùng cross < 0.
+
+    Minh họa:
+                 ← NHẬP
+           ─────────────── (vạch đỏ)
+                 → XUẤT
     """
     if image is None or not line:
         return
 
-    h, w = image.shape[:2]
     p1, p2 = line
+    h, w = image.shape[:2]
 
-    # Hàm tính khoảng cách trên chu vi (clockwise từ góc trên-trái)
-    # Chu vi: Top(0→w) → Right(w→w+h) → Bottom(w+h→2w+h) → Left(2w+h→2w+2h)
-    def perimeter_dist(p):
-        x, y = p
-        if y <= 0: return x                  # Cạnh trên: 0 → w
-        if x >= w: return w + y              # Cạnh phải: w → w+h
-        if y >= h: return w + h + (w - x)    # Cạnh dưới: w+h → 2w+h
-        return 2 * w + h + (h - y)           # Cạnh trái: 2w+h → 2w+2h
+    # --- Vẽ vạch ảo chính ---
+    cv2.line(image, p1, p2, settings.LINE_COLOR, settings.LINE_THICKNESS)
 
-    # 4 góc ảnh với khoảng cách chu vi
-    corners = [
-        ((0, 0), 0),
-        ((w, 0), w),
-        ((w, h), w + h),
-        ((0, h), 2 * w + h),
-    ]
+    # --- Tính vector vuông góc ---
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    length = (dx ** 2 + dy ** 2) ** 0.5
+    if length < 1:
+        return
 
-    d1 = perimeter_dist(p1)
-    d2 = perimeter_dist(p2)
-
-    # Đảm bảo dA < dB (pA đến trước pB trên chu vi)
-    if d1 <= d2:
-        pA, pB, dA, dB = p1, p2, d1, d2
-    else:
-        pA, pB, dA, dB = p2, p1, d2, d1
-
-    # Chia corners thành 2 nhóm:
-    # Nhóm 1 (cung ngắn A→B): góc có dA < dist < dB
-    # Nhóm 2 (cung dài B→...→A): góc có dist > dB HOẶC dist < dA
-    group1_corners = [pt for pt, cd in corners if dA < cd < dB]
+    # Vector đơn vị vuông góc
+    # cross product: dx*(cy-p1y) - dy*(cx-p1x)
+    # Hướng cross > 0 (NHẬP): (-dy, dx) đã chuẩn hóa
+    # Hướng cross < 0 (XUẤT): (dy, -dx) đã chuẩn hóa
+    nx = -dy / length  # Hướng NHẬP
+    ny = dx / length
     
-    # Nhóm 2: phải giữ đúng thứ tự theo chiều clockwise (B→End rồi Start→A)
-    g2_after_B = [pt for pt, cd in corners if cd > dB]    # Sau B
-    g2_before_A = [pt for pt, cd in corners if cd < dA]   # Trước A
-    group2_corners = g2_after_B + g2_before_A
+    # Chiều dài mũi tên (tỷ lệ với kích thước ảnh, tối thiểu 30, tối đa 80 px)
+    arrow_len = max(30, min(80, int(min(w, h) * 0.06)))
 
-    # Tạo 2 đa giác
-    poly_nhap = [pA] + group1_corners + [pB]
-    poly_xuat = [pB] + group2_corners + [pA]
+    # Điểm giữa vạch
+    mid_x = (p1[0] + p2[0]) / 2
+    mid_y = (p1[1] + p2[1]) / 2
 
-    # Vẽ và tô màu bán trong suốt
-    overlay = image.copy()
-    cv2.fillPoly(overlay, [np.array(poly_nhap, np.int32).reshape((-1, 1, 2))], nhap_color)
-    cv2.fillPoly(overlay, [np.array(poly_xuat, np.int32).reshape((-1, 1, 2))], xuat_color)
-    cv2.addWeighted(overlay, alpha, image, 1 - alpha, 0, image)
+    # --- Mũi tên NHẬP (xanh lá) ---
+    nhap_end = (int(mid_x + nx * arrow_len), int(mid_y + ny * arrow_len))
+    nhap_start = (int(mid_x), int(mid_y))
+    nhap_color = (0, 200, 0)  # Xanh lá
 
-    # Vẽ đường biên đỏ
-    cv2.line(image, p1, p2, (0, 0, 255), 2)
+    cv2.arrowedLine(image, nhap_start, nhap_end, nhap_color, 2, tipLength=0.3)
+
+    # Label NHẬP
+    label_nhap_x = int(mid_x + nx * (arrow_len + 15))
+    label_nhap_y = int(mid_y + ny * (arrow_len + 15))
+    cv2.putText(image, "NHAP", (label_nhap_x - 20, label_nhap_y + 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, nhap_color, 2)
+
+    # --- Mũi tên XUẤT (hồng) ---
+    xuat_end = (int(mid_x - nx * arrow_len), int(mid_y - ny * arrow_len))
+    xuat_start = (int(mid_x), int(mid_y))
+    xuat_color = (200, 0, 200)  # Hồng
+
+    cv2.arrowedLine(image, xuat_start, xuat_end, xuat_color, 2, tipLength=0.3)
+
+    # Label XUẤT
+    label_xuat_x = int(mid_x - nx * (arrow_len + 15))
+    label_xuat_y = int(mid_y - ny * (arrow_len + 15))
+    cv2.putText(image, "XUAT", (label_xuat_x - 20, label_xuat_y + 5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, xuat_color, 2)
 

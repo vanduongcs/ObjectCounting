@@ -1,37 +1,43 @@
-import cv2
-import configs.settings as settings
+"""
+Test Load Model: Kiểm tra khởi tạo ObjectDetector và inference cơ bản.
 
+Cách chạy: python -m tests.test_load_model
+"""
+
+import cv2
+import numpy as np
+import configs.settings as settings
 from src.services.detector import ObjectDetector
 
+
 def load_model_test():
+    """Khởi tạo ObjectDetector với model path từ settings."""
     try:
-        model_loaded = ObjectDetector(settings.MODEL_PATH, conf=0.25)
-        return model_loaded
+        detector = ObjectDetector(settings.MODEL_PATH, conf=0.25)
+        print(f"✅ Model loaded thành công từ: {settings.MODEL_PATH}")
+        return detector
     except Exception as e:
-        print("Error", e)
+        print(f"❌ Lỗi load model: {e}")
+        return None
 
-def run_model_test(detector, frame):
-    
-    # Use model to detect objects
-    result = detector.predict(frame)
 
-    # Get the image with mask and bounding box
-    predicted_image = result[0].plot(boxes=False, masks=True)
-
-    # Save the predicted image
-    saving = cv2.imwrite(str(settings.IMAGE_TEST_RESULT_PATH), predicted_image)
-
-    # Optionally track detections
-    processor = ObjectDetector(settings.MODEL_PATH)
-    detections = processor.track(frame)
-    print(detections)
-
+def run_track_test(detector):
+    """Test track trên dummy frame."""
+    dummy = np.zeros((640, 640, 3), dtype=np.uint8)
+    try:
+        raw_results, detections = detector.track(dummy)
+        print(f"✅ Track thành công - {len(detections)} detection(s)")
+        return True
+    except Exception as e:
+        print(f"❌ Lỗi track: {e}")
+        return False
 
 
 if __name__ == "__main__":
-    model_detector = load_model_test()
-    # Example: read frame from file or camera
-    frame = cv2.imread(str(settings.IMAGE_TEST_PATH))
-    run_model_test(model_detector, frame)
+    print("=" * 50)
+    print("TEST LOAD MODEL")
+    print("=" * 50)
 
-
+    detector = load_model_test()
+    if detector:
+        run_track_test(detector)

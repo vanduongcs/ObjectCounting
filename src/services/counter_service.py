@@ -6,9 +6,8 @@ Nguyên lý hoạt động:
     Khi vật đổi vùng (NHAP -> XUAT hoặc ngược lại) -> tăng biến đếm.
 
 Chống đếm nhấp nháy (flicker):
-    1. Vùng BUFFER quanh vạch -- bỏ qua khi vật đứng quá gần
-    2. Xác nhận vùng (debounce) -- vật phải ở vùng mới ≥ N frames liên tiếp
-    3. Cooldown sau đếm -- sau khi đếm, khóa object N frames
+    1. Debounce -- vật phải ở vùng mới ≥ 2 frames liên tiếp
+    2. Cooldown sau đếm -- sau khi đếm, khóa object N frames
 
 Minh họa:
                     Vạch ảo (p1 -> p2)
@@ -16,26 +15,26 @@ Minh họa:
         Vùng NHẬP       |       Vùng XUẤT
        (cross > 0)      |      (cross < 0)
                         |
-                <- buffer ->
 """
 
 from datetime import datetime
 
 import configs.settings as settings
 
+# Giới hạn event log — video dài có thể tạo hàng nghìn events
+MAX_EVENT_LOG_SIZE = 10000
+
 
 class CounterService:
-    def __init__(self, line_p1, line_p2, buffer=None, fps=30, is_live=False):
+    def __init__(self, line_p1, line_p2, fps=30, is_live=False):
         """
         Args:
             line_p1, line_p2: Tọa độ 2 đầu vạch ảo (tuple x, y).
-            buffer: Vùng đệm quanh vạch (pixel). None = dùng settings.COUNTER_BUFFER_PIXELS.
             fps: FPS thực tế (dùng tính video time).
             is_live: True = camera live (dùng system clock), False = video file.
         """
         self.line_p1 = line_p1
         self.line_p2 = line_p2
-        self.buffer = buffer if buffer is not None else settings.COUNTER_BUFFER_PIXELS
 
         # Timing
         self._fps = fps if fps > 0 else 30
@@ -45,17 +44,14 @@ class CounterService:
         # Vector hướng của vạch ảo (dùng cho cross product)
         self.dx = line_p2[0] - line_p1[0]
         self.dy = line_p2[1] - line_p1[1]
-        self.line_length = (self.dx ** 2 + self.dy ** 2) ** 0.5
 
-        # Trạng thái vùng ĐÃ XÁC NHẬN của mỗi vật: {track_id: "NHAP" | "XUAT" | None}
+        # Trạng thái vùng ĐÃ XÁC NHẬN: {track_id: "NHAP" | "XUAT"}
         self.object_states = {}
 
         # Debounce: {track_id: {"region": str, "count": int}}
-        # Đếm số frame liên tiếp vật ở vùng mới (chưa xác nhận)
         self._pending_region = {}
 
         # Cooldown: {track_id: remaining_frames}
-        # Sau khi đếm, khóa object không cho đếm lại trong N frames
         self._cooldowns = {}
 
         # Frame counter nội bộ
@@ -65,47 +61,47 @@ class CounterService:
         self.count_nhap = {}
         self.count_xuat = {}
 
-        # Event log: mỗi sự kiện nhập/xuất được ghi lại
+        # Event log
         self._event_log = []
 
-    def _get_region(self, cx, cy):
+        # LRU tracking
+        self._last_seen_frame = {}
+
+    def _get_side(self, cx, cy):
         """
-        Xác định vật ở vùng nào dựa trên cross product.
+        Xác định vật ở bên nào vạch dựa trên cross product.
 
-        Cross product của vector vạch (dx, dy) với vector (cx - p1.x, cy - p1.y):
-            cross = dx * (cy - p1.y) - dy * (cx - p1.x)
-
-        - cross > 0  -> bên trái vạch  -> NHẬP
-        - cross < 0  -> bên phải vạch  -> XUẤT
-        - |cross| / line_length < buffer -> quá gần vạch -> BUFFER (bỏ qua)
+        Returns: "NHAP" hoặc "XUAT" (không có BUFFER).
         """
         cross = self.dx * (cy - self.line_p1[1]) - self.dy * (cx - self.line_p1[0])
-
-        # Khoảng cách từ điểm đến vạch = |cross| / chiều dài vạch
-        distance = abs(cross) / self.line_length if self.line_length > 0 else 0
-
-        if distance < self.buffer:
-            return "BUFFER"
-        if cross > 0:
-            return "NHAP"
-        return "XUAT"
+        return "NHAP" if cross > 0 else "XUAT"
 
     def _prune_old_tracks(self):
-        """Xóa 20% track cũ nhất khi vượt giới hạn (Python dict giữ insertion order)."""
+        """Xóa 20% track ít gặp nhất khi vượt giới hạn."""
         if len(self.object_states) > settings.MAX_TRACKED_OBJECTS:
-            keys_to_remove = list(self.object_states.keys())[:settings.MAX_TRACKED_OBJECTS // 5]
+            sorted_by_lru = sorted(
+                self.object_states.keys(),
+                key=lambda k: self._last_seen_frame.get(k, 0)
+            )
+            keys_to_remove = sorted_by_lru[:settings.MAX_TRACKED_OBJECTS // 5]
             for key in keys_to_remove:
                 del self.object_states[key]
+                self._pending_region.pop(key, None)
+                self._cooldowns.pop(key, None)
+                self._last_seen_frame.pop(key, None)
 
     def update(self, detections):
         """
         Cập nhật trạng thái và đếm cho frame hiện tại.
 
-        Args:
-            detections: list[dict] với keys: id, label, center (cx, cy).
+        Logic đơn giản:
+            1. Vật mới → gán vùng ngay lập tức (NHAP hoặc XUAT)
+            2. Vật đổi vùng → debounce 2 frame → đếm
+            3. Cooldown sau đếm → tránh đếm trùng
         """
         self._frame_count += 1
         self._tick_cooldowns()
+        event_items = []
 
         for obj in detections:
             obj_id = obj["id"]
@@ -116,81 +112,69 @@ class CounterService:
                 continue
 
             cx, cy = obj["center"]
-            current_region = self._get_region(cx, cy)
 
-            # --- Vật thể mới xuất hiện ---
+            # Cập nhật LRU
+            self._last_seen_frame[obj_id] = self._frame_count
+
+            current_side = self._get_side(cx, cy)
+
+            # --- Vật mới → gán vùng ngay lập tức ---
             if obj_id not in self.object_states:
                 self._prune_old_tracks()
-                if current_region == "BUFFER":
-                    self.object_states[obj_id] = None
-                else:
-                    self.object_states[obj_id] = current_region
+                self.object_states[obj_id] = current_side
                 continue
 
-            confirmed_region = self.object_states[obj_id]
+            confirmed_side = self.object_states[obj_id]
 
-            # --- Đang ở buffer → reset pending, chờ ra ngoài ---
-            if current_region == "BUFFER":
+            # --- Cùng vùng → reset pending ---
+            if current_side == confirmed_side:
                 self._pending_region.pop(obj_id, None)
                 continue
 
-            # --- Chưa xác định vùng ban đầu → ghi nhận lần đầu ---
-            if confirmed_region is None:
-                self.object_states[obj_id] = current_region
-                continue
-
-            # --- Cùng vùng đã xác nhận → reset pending ---
-            if current_region == confirmed_region:
-                self._pending_region.pop(obj_id, None)
-                continue
-
-            # --- Khác vùng → bắt đầu / tiếp tục debounce ---
+            # --- Khác vùng → debounce ---
             pending = self._pending_region.get(obj_id)
-            if pending and pending["region"] == current_region:
+            if pending and pending["region"] == current_side:
                 pending["count"] += 1
             else:
-                # Vùng mới khác pending trước đó → reset
-                self._pending_region[obj_id] = {"region": current_region, "count": 1}
+                self._pending_region[obj_id] = {"region": current_side, "count": 1}
                 pending = self._pending_region[obj_id]
 
-            # Chưa đủ frames xác nhận → chờ tiếp
-            if pending["count"] < settings.COUNTER_CONFIRM_FRAMES:
+            # Cần ≥ 2 frame liên tiếp ở vùng mới
+            if pending["count"] < 2:
                 continue
 
-            # --- Đã xác nhận đổi vùng → kiểm tra cooldown rồi đếm ---
+            # --- Xác nhận đổi vùng ---
             self._pending_region.pop(obj_id, None)
 
-            # Nếu đang cooldown → chỉ cập nhật vùng, KHÔNG đếm
+            # Đang cooldown → bỏ qua
             if obj_id in self._cooldowns:
-                self.object_states[obj_id] = current_region
                 continue
 
-            # Đếm (triệt tiêu: nhập hủy xuất và ngược lại)
+            # Đếm
             action = None
-            if confirmed_region == "NHAP" and current_region == "XUAT":
-                # Sự kiện Xuất: nếu có nhập trước đó → hủy 1 nhập, ngược lại → cộng xuất
-                if self.count_nhap.get(label, 0) > 0:
-                    self.count_nhap[label] -= 1
-                else:
-                    self.count_xuat[label] = self.count_xuat.get(label, 0) + 1
+            if confirmed_side == "NHAP" and current_side == "XUAT":
+                self.count_xuat[label] = self.count_xuat.get(label, 0) + 1
                 action = "Xuất"
-            elif confirmed_region == "XUAT" and current_region == "NHAP":
-                # Sự kiện Nhập: nếu có xuất trước đó → hủy 1 xuất, ngược lại → cộng nhập
-                if self.count_xuat.get(label, 0) > 0:
-                    self.count_xuat[label] -= 1
-                else:
-                    self.count_nhap[label] = self.count_nhap.get(label, 0) + 1
+            elif confirmed_side == "XUAT" and current_side == "NHAP":
+                self.count_nhap[label] = self.count_nhap.get(label, 0) + 1
                 action = "Nhập"
 
             if action:
-                self._event_log.append({
+                ts = self._get_timestamp()
+                evt = {
                     "label": label,
                     "action": action,
-                    "timestamp": self._get_timestamp(),
-                })
+                    "timestamp": ts,
+                }
+                self._event_log.append(evt)
+                event_items.append(evt)
+                if len(self._event_log) > MAX_EVENT_LOG_SIZE:
+                    self._event_log = self._event_log[-MAX_EVENT_LOG_SIZE:]
 
-            self.object_states[obj_id] = current_region
+            self.object_states[obj_id] = current_side
             self._cooldowns[obj_id] = settings.COUNTER_COOLDOWN_FRAMES
+
+        return event_items
 
     def _tick_cooldowns(self):
         """Giảm cooldown mỗi frame."""
@@ -208,7 +192,6 @@ class CounterService:
         """Trả về timestamp dựa vào nguồn video."""
         if self._is_live:
             return datetime.now().strftime("%H:%M:%S")
-        # Video file: tính từ frame index và FPS
         total_seconds = int(self._current_frame_index / self._fps)
         h = total_seconds // 3600
         m = (total_seconds % 3600) // 60

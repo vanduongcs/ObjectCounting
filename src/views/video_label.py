@@ -23,10 +23,11 @@ from PyQt6.QtGui import QPainter, QPen
 
 class VideoLabel(QLabel):
     line_drawn_signal = pyqtSignal(tuple, tuple)
+    roi_drawn_signal = pyqtSignal(tuple, tuple)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.drawing_mode = False
+        self.drawing_mode = None
         self.start_point = None
         self.current_point = None
 
@@ -34,8 +35,8 @@ class VideoLabel(QLabel):
         self.setStyleSheet("background-color: #222; color: #EEE; font-size: 20px;")
         self.setMinimumSize(800, 600)
 
-    def enable_drawing(self, enable=True):
-        self.drawing_mode = enable
+    def enable_drawing(self, enable=True, mode="line"):
+        self.drawing_mode = mode if enable else None
         if enable:
             self.start_point = None
             self.current_point = None
@@ -59,9 +60,12 @@ class VideoLabel(QLabel):
             if self.start_point and end_point:
                 p1 = (self.start_point.x(), self.start_point.y())
                 p2 = (end_point.x(), end_point.y())
-                self.line_drawn_signal.emit(p1, p2)
+                if self.drawing_mode == "roi":
+                    self.roi_drawn_signal.emit(p1, p2)
+                else:
+                    self.line_drawn_signal.emit(p1, p2)
 
-            self.drawing_mode = False
+            self.drawing_mode = None
             self.start_point = None
             self.current_point = None
             self.update()
@@ -71,5 +75,12 @@ class VideoLabel(QLabel):
         if self.drawing_mode and self.start_point and self.current_point:
             painter = QPainter(self)
             painter.setPen(QPen(Qt.GlobalColor.yellow, 2, Qt.PenStyle.DashLine))
-            painter.drawLine(self.start_point, self.current_point)
+            if self.drawing_mode == "roi":
+                x1 = self.start_point.x()
+                y1 = self.start_point.y()
+                x2 = self.current_point.x()
+                y2 = self.current_point.y()
+                painter.drawRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+            else:
+                painter.drawLine(self.start_point, self.current_point)
             painter.end()

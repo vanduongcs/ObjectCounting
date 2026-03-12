@@ -16,6 +16,8 @@ Tại sao cần parse?
         - center: Tâm bounding box (cx, cy)
 """
 
+import math
+
 
 def parse_tracking_results(results):
     """
@@ -39,11 +41,21 @@ def parse_tracking_results(results):
         for box in boxes:
             # xywh = [center_x, center_y, width, height]
             cx, cy, w, h = box.xywh[0]
+            cx, cy, w, h = float(cx), float(cy), float(w), float(h)
+
+            # Pre-filter: skip bbox degenerate (w/h quá nhỏ hoặc NaN/Inf)
+            # Ngăn Kalman filter crash từ gốc thay vì bắt lỗi sau
+            if w <= 1 or h <= 1:
+                continue
+            if not (math.isfinite(cx) and math.isfinite(cy)
+                    and math.isfinite(w) and math.isfinite(h)):
+                continue
+
             detections.append({
                 "id": int(box.id.item()),       # Track ID (ByteTrack gán)
                 "label": int(box.cls.item()),   # Class ID (0, 1, 2, ...)
                 "conf": float(box.conf.item()), # Confidence score
-                "center": (float(cx), float(cy)),  # Tâm bbox
-                "bbox_wh": (float(w), float(h)),   # Kích thước bbox (cho stitcher)
+                "center": (cx, cy),             # Tâm bbox
+                "bbox_wh": (w, h),              # Kích thước bbox
             })
     return detections

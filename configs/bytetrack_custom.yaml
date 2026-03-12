@@ -1,19 +1,20 @@
-# ByteTrack Tracker Configuration (tùy chỉnh cho ứng dụng đếm)
+# ByteTrack Tracker Configuration
+# Dựa trên ultralytics default, chỉ tùy chỉnh track_buffer theo FPS
 # Tham khảo: ultralytics/cfg/trackers/bytetrack.yaml
 
-tracker_type: bytetrack   # Loại tracker
+tracker_type: bytetrack
 
-# Thresholds
-track_high_thresh: 0.3    # Ngưỡng detection cao (track đáng tin cậy)
-track_low_thresh: 0.05    # Ngưỡng detection thấp (re-attach lost tracks)
-new_track_thresh: 0.4     # Ngưỡng để tạo track mới
+# Thresholds — GIỮ NGUYÊN DEFAULT ultralytics
+# Lý do: default đã fine-tune cho cân bằng giữa track quality và noise rejection
+track_high_thresh: 0.25   # Stage 1: detection cần ≥ 0.25 để match trực tiếp
+track_low_thresh: 0.1     # Stage 2: detection 0.1-0.25 được thử match với lost tracks
+new_track_thresh: 0.25    # Detection cần ≥ 0.25 để tạo track MỚI (không sync với DETECTION_CONFIDENCE)
 
-# Lifecycle
-track_buffer: 150         # Số frame giữ track khi mất (~5 giây ở 30FPS, đồng bộ với stitcher)
-match_thresh: 0.6         # Ngưỡng IoU để ghép detection với track
+# Lifecycle — tùy chỉnh cho ứng dụng đếm
+# track_buffer sẽ bị override bởi _generate_tracker_config(fps) khi chạy
+# Giá trị ở đây = fallback nếu configure_tracker chưa gọi
+track_buffer: 30
 
-# Các tham số bổ sung bắt buộc
-fuse_score: true          # Kết hợp confidence score vào IoU khi ghép track
-aspect_ratio_thresh: 10.0 # Tỷ lệ chiều dài/rộng tối đa
-min_box_area: 10          # Diện tích box tối thiểu (pixel²)
-with_reid: true           # Dùng ReID (appearance feature) để nhận lại ID khi bị che khuất
+# Association
+match_thresh: 0.8         # IoU threshold — DEFAULT (0.6 quá thấp gây match nhầm)
+fuse_score: true          # Kết hợp confidence + IoU khi matching

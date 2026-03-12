@@ -135,9 +135,14 @@ def draw_line_with_arrows(image, line):
 
     p1, p2 = line
     h, w = image.shape[:2]
+    target_w = getattr(settings, "UI_TARGET_WIDTH", 800)
+    target_h = getattr(settings, "UI_TARGET_HEIGHT", 600)
+    ui_scale = min(target_w / w, target_h / h) if w > 0 and h > 0 else 1.0
+    scale_factor = (1.0 / ui_scale) if ui_scale > 0 else 1.0
+    line_thickness = max(1, int(round(settings.LINE_THICKNESS * scale_factor)))
 
     # --- Vẽ vạch ảo chính ---
-    cv2.line(image, p1, p2, settings.LINE_COLOR, settings.LINE_THICKNESS)
+    cv2.line(image, p1, p2, settings.LINE_COLOR, line_thickness)
 
     # --- Tính vector vuông góc ---
     dx = p2[0] - p1[0]
@@ -154,7 +159,8 @@ def draw_line_with_arrows(image, line):
     ny = dx / length
     
     # Chiều dài mũi tên (tỷ lệ với kích thước ảnh, tối thiểu 30, tối đa 80 px)
-    arrow_len = max(30, min(80, int(min(w, h) * 0.06)))
+    base_arrow = getattr(settings, "UI_BASE_ARROW_LEN", 50)
+    arrow_len = max(15, int(round(base_arrow * scale_factor)))
 
     # Điểm giữa vạch
     mid_x = (p1[0] + p2[0]) / 2
@@ -165,24 +171,33 @@ def draw_line_with_arrows(image, line):
     nhap_start = (int(mid_x), int(mid_y))
     nhap_color = (0, 200, 0)  # Xanh lá
 
-    cv2.arrowedLine(image, nhap_start, nhap_end, nhap_color, 2, tipLength=0.3)
+    arrow_thick = max(1, int(round(2 * scale_factor)))
+    cv2.arrowedLine(image, nhap_start, nhap_end, nhap_color, arrow_thick, tipLength=0.3)
 
     # Label NHẬP
-    label_nhap_x = int(mid_x + nx * (arrow_len + 15))
-    label_nhap_y = int(mid_y + ny * (arrow_len + 15))
-    cv2.putText(image, "NHAP", (label_nhap_x - 20, label_nhap_y + 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, nhap_color, 2)
+    # Đẩy label ra xa mũi tên để tránh chồng lên nhau
+    label_offset = int(round((arrow_len + 30) * scale_factor))
+    label_nhap_x = int(mid_x + nx * label_offset)
+    label_nhap_y = int(mid_y + ny * label_offset)
+    text_off_x = int(round(20 * scale_factor))
+    text_off_y = int(round(5 * scale_factor))
+    text_scale = getattr(settings, "UI_BASE_FONT_SCALE", 0.7) * scale_factor
+    text_thick = max(1, int(round(2 * scale_factor)))
+    (tw, th), base = cv2.getTextSize("NHAP", cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_thick)
+    cv2.putText(image, "NHAP", (label_nhap_x - text_off_x, label_nhap_y + text_off_y),
+                cv2.FONT_HERSHEY_SIMPLEX, text_scale, nhap_color, text_thick)
 
     # --- Mũi tên XUẤT (hồng) ---
     xuat_end = (int(mid_x - nx * arrow_len), int(mid_y - ny * arrow_len))
     xuat_start = (int(mid_x), int(mid_y))
     xuat_color = (200, 0, 200)  # Hồng
 
-    cv2.arrowedLine(image, xuat_start, xuat_end, xuat_color, 2, tipLength=0.3)
+    cv2.arrowedLine(image, xuat_start, xuat_end, xuat_color, arrow_thick, tipLength=0.3)
 
     # Label XUẤT
-    label_xuat_x = int(mid_x - nx * (arrow_len + 15))
-    label_xuat_y = int(mid_y - ny * (arrow_len + 15))
-    cv2.putText(image, "XUAT", (label_xuat_x - 20, label_xuat_y + 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, xuat_color, 2)
+    label_xuat_x = int(mid_x - nx * label_offset)
+    label_xuat_y = int(mid_y - ny * label_offset)
+    (tw2, th2), base2 = cv2.getTextSize("XUAT", cv2.FONT_HERSHEY_SIMPLEX, text_scale, text_thick)
+    cv2.putText(image, "XUAT", (label_xuat_x - text_off_x, label_xuat_y + text_off_y),
+                cv2.FONT_HERSHEY_SIMPLEX, text_scale, xuat_color, text_thick)
 

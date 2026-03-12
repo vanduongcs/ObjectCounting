@@ -13,8 +13,94 @@ Cấu trúc file Excel:
     Sheet "<tên hàng>": Hành động | Thời gian  (mỗi loại hàng 1 sheet)
 """
 
+import os
+import re
+
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side
+
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
+try:
+    import pytesseract
+except Exception:
+    pytesseract = None
+
+import configs.settings as settings
+
+_TESS_READY = None
+
+
+def _ensure_tesseract():
+    global _TESS_READY
+    if _TESS_READY is not None:
+        return _TESS_READY
+    if pytesseract is None or cv2 is None:
+        _TESS_READY = False
+        return False
+    tcmd = getattr(settings, "TESSERACT_CMD", "") or ""
+    if tcmd and os.path.exists(tcmd):
+        try:
+            pytesseract.pytesseract.tesseract_cmd = tcmd
+            _TESS_READY = True
+            return True
+        except Exception:
+            _TESS_READY = False
+            return False
+    default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if os.path.exists(default_path):
+        try:
+            pytesseract.pytesseract.tesseract_cmd = default_path
+        except Exception:
+            pass
+    _TESS_READY = True
+    return True
+
+
+def _ocr_timestamp_from_image(image_path):
+    if not settings.TIMESTAMP_OCR_ENABLED:
+        return ""
+    if not _ensure_tesseract():
+        return ""
+    if not os.path.exists(image_path):
+        return ""
+    img = cv2.imread(image_path)
+    if img is None:
+        return ""
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_LINEAR)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, th1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    _, th2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    config = f"--psm 7 -c tessedit_char_whitelist={settings.TIMESTAMP_OCR_WHITELIST}"
+
+    def _run_ocr(img_in):
+        txt = pytesseract.image_to_string(img_in, lang=settings.TIMESTAMP_OCR_LANG, config=config)
+        txt = re.sub(r"[^0-9:/\\- ]+", " ", txt)
+        txt = re.sub(r"\s+", " ", txt).strip()
+        return txt
+
+    texts = [_run_ocr(th1), _run_ocr(th2)]
+    pattern = settings.TIMESTAMP_OCR_REGEX
+    for t in texts:
+        m = re.search(pattern, t)
+        if m:
+            date_m = re.search(r"\d{2}[-/]\d{2}[-/]\d{4}", m.group(0))
+            time_m = re.search(r"\d{2}:\d{2}:\d{2}", m.group(0))
+            if date_m and time_m:
+                return f"{date_m.group(0)} {time_m.group(0)}"
+            return m.group(0)
+
+    for t in texts:
+        date_m = re.search(r"\d{2}[-/]\d{2}[-/]\d{4}", t)
+        time_m = re.search(r"\d{2}:\d{2}:\d{2}", t)
+        if date_m and time_m:
+            return f"{date_m.group(0)} {time_m.group(0)}"
+    return ""
 
 
 def export_to_excel(filepath, count_nhap, count_xuat, event_log=None):
@@ -34,6 +120,24 @@ def export_to_excel(filepath, count_nhap, count_xuat, event_log=None):
         event_log = []
 
     all_labels = sorted(set(count_nhap.keys()) | set(count_xuat.keys()))
+
+    # Preprocess event_log: OCR timestamp images if needed
+    processed_events = []
+    ocr_cache = {}
+    for evt in event_log:
+        ts = evt.get("timestamp", "")
+        if isinstance(ts, str) and os.path.exists(ts):
+            if ts not in ocr_cache:
+                text = _ocr_timestamp_from_image(ts)
+                ocr_cache[ts] = text if text else ts
+            ts_out = ocr_cache[ts]
+        else:
+            ts_out = ts
+        processed_events.append({
+            "label": evt.get("label"),
+            "action": evt.get("action"),
+            "timestamp": ts_out,
+        })
 
     try:
         wb = Workbook()
@@ -78,7 +182,7 @@ def export_to_excel(filepath, count_nhap, count_xuat, event_log=None):
                 cell.border = thin_border
 
             # Filter events cho label này
-            for evt in event_log:
+            for evt in processed_events:
                 if evt["label"] == label:
                     ws.append([evt["action"], evt["timestamp"]])
 

@@ -49,7 +49,9 @@ def start_extraction(video_path):
     Returns:
         (thread, queue) -- MainWindow giữ reference để điều khiển (pause/stop/set_fps).
     """
-    frame_queue = queue.Queue(maxsize=settings.MAX_QUEUE_SIZE)
+    is_stream = str(video_path).startswith(("http", "rtsp"))
+    max_q = settings.MAX_QUEUE_SIZE_STREAM if is_stream else settings.MAX_QUEUE_SIZE
+    frame_queue = queue.Queue(maxsize=max_q)
     thread = FrameExtractionThread(video_path, frame_queue=frame_queue)
     thread.start()
     return thread, frame_queue

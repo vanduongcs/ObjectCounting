@@ -19,9 +19,12 @@ import configs.settings as settings
 
 
 def init_db():
-    """Tạo database và table nếu chưa có."""
+    """Tạo database và table (clear dữ liệu cũ)."""
     settings.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(settings.DB_PATH))
+    # Clear all old data and recreate schema
+    conn.execute("DROP TABLE IF EXISTS sessions")
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,6 +32,7 @@ def init_db():
             output_path TEXT,
             count_nhap TEXT DEFAULT '{}',
             count_xuat TEXT DEFAULT '{}',
+            event_log TEXT DEFAULT '[]',
             duration_sec REAL DEFAULT 0,
             created_at TEXT DEFAULT (datetime('now', 'localtime'))
         )
@@ -38,7 +42,7 @@ def init_db():
     print(f"[DB] Database ready: {settings.DB_PATH}")
 
 
-def save_session(video_name, output_path, count_nhap, count_xuat, duration_sec=0):
+def save_session(video_name, output_path, count_nhap, count_xuat, duration_sec=0, event_log=None):
     """
     Lưu 1 session xử lý vào database.
 
@@ -51,13 +55,14 @@ def save_session(video_name, output_path, count_nhap, count_xuat, duration_sec=0
     """
     conn = sqlite3.connect(str(settings.DB_PATH))
     conn.execute(
-        """INSERT INTO sessions (video_name, output_path, count_nhap, count_xuat, duration_sec)
-           VALUES (?, ?, ?, ?, ?)""",
+        """INSERT INTO sessions (video_name, output_path, count_nhap, count_xuat, event_log, duration_sec)
+           VALUES (?, ?, ?, ?, ?, ?)""",
         (
             video_name,
             str(output_path) if output_path else "",
             json.dumps(count_nhap, ensure_ascii=False),
             json.dumps(count_xuat, ensure_ascii=False),
+            json.dumps(event_log or [], ensure_ascii=False),
             duration_sec,
         ),
     )
@@ -72,7 +77,7 @@ def get_all_sessions():
 
     Returns:
         list[dict] với keys: id, video_name, output_path, count_nhap, count_xuat,
-                             duration_sec, created_at
+                             duration_sec, created_at, event_log
     """
     conn = sqlite3.connect(str(settings.DB_PATH))
     conn.row_factory = sqlite3.Row
@@ -91,6 +96,7 @@ def get_all_sessions():
             "count_xuat": json.loads(row["count_xuat"]) if row["count_xuat"] else {},
             "duration_sec": row["duration_sec"],
             "created_at": row["created_at"],
+            "event_log": json.loads(row["event_log"]) if row["event_log"] else [],
         })
     return results
 

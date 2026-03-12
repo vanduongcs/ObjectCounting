@@ -7,11 +7,10 @@ Khi cần thay đổi hành vi hệ thống, chỉ cần sửa file này.
 Ai dùng module này?
     - main.py             -- MODEL_PATH
     - video_service.py    -- BASE_DIR, MAX_QUEUE_SIZE
-    - detector.py         -- DETECTION_CONFIDENCE, TRACK_BUFFER_*
+    - detector.py         -- DETECTION_CONFIDENCE, DETECTION_IMGSZ
     - counter_service.py  -- COUNTER_BUFFER_PIXELS, MAX_TRACKED_OBJECTS
-    - tracklet_stitcher.py-- STITCH_*
     - frame_extractor.py  -- DEFAULT_FPS, MAX_STREAM_FAILURES, DEFAULT_STREAM_WIDTH
-    - ai_service.py       -- TRACK_BUFFER_SECONDS, DEFAULT_FPS
+    - ai_service.py       -- DEFAULT_FPS
     - draw_line.py        -- LINE_*
 """
 
@@ -26,7 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Đường dẫn model YOLO (OpenVINO format) -- dùng bởi main.py -> AIService
 MODELS_DIR = BASE_DIR / "models"
-MODEL_PATH = MODELS_DIR / "best.pt"
+MODEL_PATH = MODELS_DIR / "best_openvino_model"
 
 # Đường dẫn video test -- dùng cho testing
 VIDEO_TEST_PATH = BASE_DIR / "assets" / "videos" / "test.mp4"
@@ -34,6 +33,7 @@ VIDEO_TEST_PATH = BASE_DIR / "assets" / "videos" / "test.mp4"
 # Cache và output
 CACHE_DIR = BASE_DIR / "data" / "cache"            # Frame annotated tạm
 OUTPUT_DIR = BASE_DIR / "data" / "output"           # Video output đã xử lý
+SNAPSHOT_DIR = BASE_DIR / "data" / "cache_processed"  # Ảnh lưu khi có sự kiện đếm
 DB_PATH = BASE_DIR / "data" / "history.db"          # SQLite database
 CACHE_IMAGE_QUALITY = 85                            # JPEG quality (0-100)
 OUTPUT_VIDEO_FPS = 30                               # FPS cho video output
@@ -43,40 +43,17 @@ OUTPUT_VIDEO_FPS = 30                               # FPS cho video output
 # ═══════════════════════════════════════════════════════════════════════
 
 # Ngưỡng confidence cho YOLO detection
-DETECTION_CONFIDENCE = 0.15
+DETECTION_CONFIDENCE = 0.4
+
+# Kích thước ảnh đầu vào cho YOLO
+# OpenVINO model export với shape cố định → phải khớp với lúc export
+# Muốn dùng 1280: cần re-export model với imgsz=1280
+DETECTION_IMGSZ = 640
 
 # ═══════════════════════════════════════════════════════════════════════
-# TRACKING (ByteTrack)
+# TRACKING (ByteTrack) -- đang dùng default ultralytics
 # ═══════════════════════════════════════════════════════════════════════
-
-# Thời gian giữ track khi vật bị mất (giây)
-# track_buffer = FPS × TRACK_BUFFER_SECONDS (ví dụ: 30 FPS × 5s = 150 frames)
-TRACK_BUFFER_SECONDS = 5
-
-# Track buffer tối thiểu (frames) -- tránh buffer quá ngắn khi FPS thấp
-TRACK_BUFFER_MIN_FRAMES = 30
-
-# ═══════════════════════════════════════════════════════════════════════
-# TRACKLET STITCHER (ghép nối quỹ đạo)
-# ═══════════════════════════════════════════════════════════════════════
-
-STITCH_MAX_DISTANCE = 200        # Pixel tối đa giữa predicted pos và actual pos
-STITCH_SIZE_RATIO_THRESH = 0.5   # Bbox chênh lệch kích thước tối đa (50%)
-STITCH_MIN_OBSERVE_FRAMES = 5    # Track phải quan sát ≥ N frames mới vào pool
-STITCH_CONFIDENCE_GATE = 0.2     # Conf tối thiểu của detection mới
-STITCH_REMAP_COOLDOWN = 10       # Cooldown sau mỗi lần ghép (frames)
-STITCH_MAX_LOST_TRACKS = 200     # Giới hạn lost pool
-STITCH_COST_THRESHOLD = 0.6      # Cost tối đa để chấp nhận ghép
-
-# Trọng số cost function (tổng = 1.0)
-STITCH_W_DISTANCE = 0.40
-STITCH_W_SIZE = 0.25
-STITCH_W_TIME = 0.20
-STITCH_W_DIRECTION = 0.15
-
-# Guard 7: Collision với active track — nếu new detection overlap ≥ N%
-# với active track khác → reject stitch (tránh cướp ID khi chồng lấn)
-STITCH_COLLISION_IOU_THRESH = 0.3
+# Hiện tại dùng bytetrack.yaml mặc định, không custom gì.
 
 # ═══════════════════════════════════════════════════════════════════════
 # COUNTER (đếm nhập/xuất)
@@ -85,13 +62,6 @@ STITCH_COLLISION_IOU_THRESH = 0.3
 # Chỉ đếm các class này (label ID). None = đếm tất cả.
 # Lấy từ metadata.yaml: 0=can_nho, 1=can_to, 2=xo_nuoc
 COUNTING_CLASSES = {0, 1}  # Không đếm xo_nuoc (class 2)
-
-# Vùng đệm quanh vạch ảo (pixel) -- tránh đếm rung khi vật đứng gần vạch
-COUNTER_BUFFER_PIXELS = 15
-
-# Số frames liên tiếp vật phải ở vùng mới để xác nhận chuyển vùng (debounce)
-# 2 = chặn flicker 1-frame, không bỏ sót vật thực
-COUNTER_CONFIRM_FRAMES = 2
 
 # Cooldown sau mỗi lần đếm (frames) -- khóa object không cho đếm lại
 # 15 frames ≈ 0.5s @30FPS -- đủ ngăn flicker, không bỏ sót vật qua nhanh
@@ -119,6 +89,10 @@ MAX_STREAM_FAILURES = 30
 # Kích thước tối đa của Queue frame
 # Giá trị nhỏ = ít RAM nhưng AI có thể phải chờ; lớn = tốn RAM nhưng mượt hơn
 MAX_QUEUE_SIZE = 30
+# Queue nhỏ cho stream để ưu tiên realtime (giảm độ trễ)
+MAX_QUEUE_SIZE_STREAM = 2
+# Luôn ưu tiên frame mới nhất khi xử lý stream (giảm lag)
+REALTIME_DROP_FRAMES = True
 
 # ═══════════════════════════════════════════════════════════════════════
 # UI / DRAWING (vẽ overlay)
@@ -130,3 +104,25 @@ LINE_OVERLAY_ALPHA = 0.1
 # Màu và độ dày vạch ảo trên ảnh (BGR format)
 LINE_COLOR = (0, 0, 255)     # Đỏ
 LINE_THICKNESS = 2
+
+# Kích thước hiển thị mục tiêu (dùng để scale overlay khi resize UI)
+UI_TARGET_WIDTH = 800
+UI_TARGET_HEIGHT = 600
+UI_BASE_FONT_SCALE = 0.7
+UI_BASE_TEXT_THICKNESS = 2
+UI_BASE_BOX_THICKNESS = 2
+UI_BASE_ARROW_LEN = 50
+
+# Timestamp space (crop góc trái)
+TIMESTAMP_SPACE_ENABLED = True
+# ROI theo tỉ lệ ảnh gốc: (x, y, w, h)
+TIMESTAMP_SPACE_REL = (0.0, 0.0, 0.35, 0.08)
+TIMESTAMP_SPACE_DIR = BASE_DIR / "data" / "timestamp_space"
+TIMESTAMP_SPACE_ROI_PATH = TIMESTAMP_SPACE_DIR / "roi.json"
+
+# OCR after stop (video only)
+TIMESTAMP_OCR_ENABLED = True
+TIMESTAMP_OCR_LANG = "eng"
+TIMESTAMP_OCR_WHITELIST = "0123456789:-/ "
+TIMESTAMP_OCR_REGEX = r"\d{2}[-/]\d{2}[-/]\d{4}.*?\d{2}:\d{2}:\d{2}"
+TESSERACT_CMD = ""

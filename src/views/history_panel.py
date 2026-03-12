@@ -16,11 +16,12 @@ import sys
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QScrollArea, QFrame, QMessageBox,
+    QScrollArea, QFrame, QMessageBox, QFileDialog,
 )
 from PyQt6.QtCore import Qt
 
 from src.services import db_service
+from src.utils.export_excel_processor import export_to_excel
 
 
 class HistoryPanel(QWidget):
@@ -154,6 +155,21 @@ class HistoryPanel(QWidget):
         play_btn.clicked.connect(lambda _, s=session: self._play_video(s))
         btn_row.addWidget(play_btn)
 
+        export_btn = QPushButton("Xuất Excel")
+        export_btn.setFixedHeight(26)
+        export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        export_btn.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #555;
+                border-radius: 3px;
+                padding: 2px 8px;
+                font-size: 11px;
+            }
+            QPushButton:hover { background: #3a3a3a; }
+        """)
+        export_btn.clicked.connect(lambda _, s=session: self._export_session(s))
+        btn_row.addWidget(export_btn)
+
         btn_row.addStretch()
 
         del_btn = QPushButton("Xóa")
@@ -212,3 +228,25 @@ class HistoryPanel(QWidget):
                     pass
 
             self.refresh()
+
+    def _export_session(self, session):
+        """Xuất Excel cho session đã chọn."""
+        nhap = session.get("count_nhap", {})
+        xuat = session.get("count_xuat", {})
+        event_log = session.get("event_log", [])
+        if not nhap and not xuat:
+            QMessageBox.warning(self, "Cảnh báo", "Không có dữ liệu để xuất!")
+            return
+
+        default_name = f"{session.get('video_name', 'output')}.xlsx"
+        filepath, _ = QFileDialog.getSaveFileName(
+            self, "Lưu file Excel", default_name, "Excel Files (*.xlsx);;All Files (*)"
+        )
+        if not filepath:
+            return
+
+        ok, msg = export_to_excel(filepath, nhap, xuat, event_log)
+        if ok:
+            QMessageBox.information(self, "Kết quả", msg)
+        else:
+            QMessageBox.critical(self, "Kết quả", msg)

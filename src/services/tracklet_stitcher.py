@@ -65,8 +65,10 @@ class TrackletStitcher:
         # Bộ đếm frame hiện tại
         self._frame_count = 0
 
-        # Chu kỳ dọn dẹp (mỗi 300 frames)
-        self._cleanup_interval = max(int(self.fps * 10), 300)
+        # Chu kỳ dọn dẹp — dùng max_age thay vì cố định 300 frames
+        # để ghost tracks không tích lũy quá lâu giữa các lần cleanup
+        max_age = int(self.max_lost_seconds * self.fps * 2)
+        self._cleanup_interval = max(max_age, 60)
 
     # ─── PUBLIC ───────────────────────────────────────────────────────
 
@@ -328,20 +330,6 @@ class TrackletStitcher:
 
         distance_score = distance / settings.STITCH_MAX_DISTANCE
 
-        # ── Size score ──
-        det_w, det_h = det.get("bbox_wh", (0, 0))
-        lost_w, lost_h = lost_info["bbox_wh"]
-
-        if det_w > 0 and det_h > 0 and lost_w > 0 and lost_h > 0:
-            det_area = det_w * det_h
-            lost_area = lost_w * lost_h
-            size_ratio = abs(det_area - lost_area) / max(det_area, lost_area)
-            if size_ratio > settings.STITCH_SIZE_RATIO_THRESH:
-                return None
-            size_score = size_ratio / settings.STITCH_SIZE_RATIO_THRESH
-        else:
-            size_score = 0.5
-
         # ── Time score ──
         time_score = seconds_lost / self.max_lost_seconds
 
@@ -352,9 +340,8 @@ class TrackletStitcher:
         if direction_score is None:
             return None
 
-        # ── Tổng hợp cost ──
+        # ── Tổng hợp cost (đã bỏ size_score — bbox thay đổi kích thước khi che khuất) ──
         cost = (settings.STITCH_W_DISTANCE * distance_score +
-                settings.STITCH_W_SIZE * size_score +
                 settings.STITCH_W_TIME * time_score +
                 settings.STITCH_W_DIRECTION * direction_score)
 
@@ -447,11 +434,18 @@ class TrackletStitcher:
         return False
 
     def _resolve_id(self, raw_id):
-        """Tra cứu remap table: nếu ID đã bị remap trước đó, trả về ID gốc."""
-        entry = self._remap_table.get(raw_id)
-        if entry:
-            return entry["target"]
-        return raw_id
+        """Tra cứu remap table: nếu ID đã bị remap trước đó, trả về ID gốc.
+
+        Hỗ trợ chain remap: ID 7 → 5 → 3 → trả về 3.
+        Giới hạn depth=10 tránh vòng lặp vô hạn nếu remap table bị corrupt.
+        """
+        resolved = raw_id
+        for _ in range(10):  # max depth
+            entry = self._remap_table.get(resolved)
+            if entry is None:
+                break
+            resolved = entry["target"]
+        return resolved
 
     def _tick_cooldowns(self):
         """Giảm cooldown mỗi frame, xóa khi hết."""

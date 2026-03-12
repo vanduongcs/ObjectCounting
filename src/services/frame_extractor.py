@@ -114,11 +114,17 @@ class FrameExtractionThread(QThread):
             consecutive_failures = 0
             frame_pos += 1
 
-            # Transform (xoay + resize)
-            frame = self._apply_transforms(frame, self._is_stream)
+            # Transform: xoay trước (để ROI trùng với ảnh user thấy)
+            frame = self._apply_rotation(frame)
+
+            # Timestamp space trước khi resize (dùng frame đã xoay)
+            ts_roi = self._crop_timestamp_space(frame) if settings.TIMESTAMP_SPACE_ENABLED else None
+
+            # Resize sau cùng
+            frame = self._apply_resize(frame, self._is_stream)
 
             # Đẩy vào queue kèm vị trí frame
-            self._enqueue_frame((frame, frame_pos))
+            self._enqueue_frame((frame, frame_pos, ts_roi))
 
         cap.release()
         self.is_running = False
@@ -141,14 +147,15 @@ class FrameExtractionThread(QThread):
             return settings.DEFAULT_FPS
         return fps
 
-    def _apply_transforms(self, frame, is_stream):
-        """Xoay và resize frame."""
-        # Xoay
+    def _apply_rotation(self, frame):
+        """Xoay frame theo góc hiện tại."""
         rotation = ROTATION_MAP.get(self.rotation_angle)
         if rotation is not None:
             frame = cv2.rotate(frame, rotation)
+        return frame
 
-        # Resize
+    def _apply_resize(self, frame, is_stream):
+        """Resize frame."""
         width = self.target_width
         if width == 0 and is_stream:
             width = settings.DEFAULT_STREAM_WIDTH
@@ -160,6 +167,22 @@ class FrameExtractionThread(QThread):
                 frame = cv2.resize(frame, (width, int(h * scale)))
 
         return frame
+
+    @staticmethod
+    def _crop_timestamp_space(frame):
+        """Crop vùng timestamp space theo tỉ lệ settings.TIMESTAMP_SPACE_REL."""
+        try:
+            x, y, w, h = settings.TIMESTAMP_SPACE_REL
+            ih, iw = frame.shape[:2]
+            x1 = max(0, int(x * iw))
+            y1 = max(0, int(y * ih))
+            x2 = min(iw, int((x + w) * iw))
+            y2 = min(ih, int((y + h) * ih))
+            if x2 <= x1 or y2 <= y1:
+                return None
+            return frame[y1:y2, x1:x2].copy()
+        except Exception:
+            return None
 
     def _enqueue_frame(self, item):
         """

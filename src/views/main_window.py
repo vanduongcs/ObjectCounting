@@ -21,6 +21,7 @@ Nguyên tắc:
 
 import os
 import cv2
+import json
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QGridLayout,
     QVBoxLayout, QPushButton,
@@ -63,6 +64,7 @@ class MainWindow(QMainWindow):
         self.virtual_line = None
         self.virtual_line_frame_size = None
         self.rotation_angle = 0
+        self.timestamp_space_rel = None
 
         self.extraction_thread = None
         self.frame_queue = None
@@ -76,8 +78,10 @@ class MainWindow(QMainWindow):
         # Signal connections
         self.display_adapter.frame_signal.connect(self.update_image)
         self.display_adapter.count_signal.connect(self.update_counter_table)
+        self.display_adapter.fps_signal.connect(self.update_fps)
 
         self._build_ui()
+        self._load_timestamp_space_roi()
 
     # ===== UI BUILDER =====
 
@@ -89,6 +93,7 @@ class MainWindow(QMainWindow):
         # Video (trái)
         self.video_label = VideoLabel()
         self.video_label.line_drawn_signal.connect(self.handle_line_drawn)
+        self.video_label.roi_drawn_signal.connect(self.handle_timestamp_space_drawn)
         layout.addWidget(self.video_label, 0, 0)
 
         # Panel điều khiển (phải)
@@ -110,6 +115,9 @@ class MainWindow(QMainWindow):
         self.history_panel.setFixedWidth(300)
         layout.addWidget(self.history_panel, 0, 2)
 
+        # Sync UI target size for overlay scaling
+        self._update_ui_target_size()
+
     def _build_controls(self, parent):
         """Nhóm controls: Resolution, Confidence, Checkboxes."""
         group = QGroupBox("Điều khiển")
@@ -118,7 +126,7 @@ class MainWindow(QMainWindow):
         # Resolution
         grid.addWidget(QLabel("Độ phân giải (W):"), 0, 0)
         self.res_combo = QComboBox()
-        self.res_combo.addItems(["Gốc", "480", "640", "1280"])
+        self.res_combo.addItems(["480", "640", "1280"])
         self.res_combo.currentTextChanged.connect(self.change_resolution)
         grid.addWidget(self.res_combo, 0, 1)
 
@@ -127,7 +135,7 @@ class MainWindow(QMainWindow):
         self.conf_spinbox = QDoubleSpinBox()
         self.conf_spinbox.setRange(0.05, 1.0)
         self.conf_spinbox.setSingleStep(0.05)
-        self.conf_spinbox.setValue(0.15)
+        self.conf_spinbox.setValue(0.4)
         self.conf_spinbox.valueChanged.connect(self.change_conf)
         grid.addWidget(self.conf_spinbox, 1, 1)
 
@@ -137,10 +145,9 @@ class MainWindow(QMainWindow):
         self.show_boxes_cb.toggled.connect(self.toggle_show_boxes)
         grid.addWidget(self.show_boxes_cb, 2, 0, 1, 2)
 
-        self.show_masks_cb = QCheckBox("Hiển thị Mask")
-        self.show_masks_cb.setChecked(False)
-        self.show_masks_cb.toggled.connect(self.toggle_show_masks)
-        grid.addWidget(self.show_masks_cb, 3, 0, 1, 2)
+        self.fps_label = QLabel("FPS: --")
+        self.fps_label.setStyleSheet("color: #66d9ef; font-weight: bold;")
+        grid.addWidget(self.fps_label, 3, 0, 1, 2)
 
         group.setLayout(grid)
         parent.addWidget(group)
@@ -162,15 +169,18 @@ class MainWindow(QMainWindow):
         self.rotate_btn = self._btn("Xoay 90°", sz, self.rotate_camera, False)
         grid.addWidget(self.rotate_btn, 1, 1)
 
+        self.timestamp_space_btn = self._btn("Vẽ Timestamp space", sz, self.start_drawing_timestamp_space, False)
+        grid.addWidget(self.timestamp_space_btn, 2, 0)
+
         self.start_btn = self._btn("Bắt đầu", sz, self.start_processing, False)
-        grid.addWidget(self.start_btn, 2, 0)
+        grid.addWidget(self.start_btn, 2, 1)
 
         self.pause_btn = self._btn("Tạm dừng", sz, self.toggle_pause, False)
-        grid.addWidget(self.pause_btn, 2, 1)
+        grid.addWidget(self.pause_btn, 3, 0)
 
         self.stop_btn = self._btn("Dừng", (290, 40), self.stop_processing, False)
         self.stop_btn.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold;")
-        grid.addWidget(self.stop_btn, 3, 0, 1, 2)
+        grid.addWidget(self.stop_btn, 4, 0, 1, 2)
 
         parent.addLayout(grid)
 
@@ -203,10 +213,6 @@ class MainWindow(QMainWindow):
     def toggle_show_boxes(self, checked):
         """Bật/tắt hiển thị bounding box."""
         self.ai_service.show_boxes = checked
-
-    def toggle_show_masks(self, checked):
-        """Bật/tắt hiển thị mask."""
-        self.ai_service.show_masks = checked
 
     def export_data(self):
         """Xuất dữ liệu đếm ra file Excel."""
@@ -261,6 +267,7 @@ class MainWindow(QMainWindow):
         # Mở khóa nút
         self.draw_btn.setEnabled(True)
         self.rotate_btn.setEnabled(True)
+        self.timestamp_space_btn.setEnabled(True)
         self.start_btn.setEnabled(True)
         self.choose_btn.setText("Chọn lại video")
         if "http" in video_path or "rtsp" in video_path:
@@ -288,6 +295,11 @@ class MainWindow(QMainWindow):
         self.video_label.enable_drawing(True)
         self.draw_btn.setText("Kéo chuột để vẽ...")
         self.draw_btn.setEnabled(False)
+
+    def start_drawing_timestamp_space(self):
+        self.video_label.enable_drawing(True, mode="roi")
+        self.timestamp_space_btn.setText("Kéo chuột để chọn Timestamp...")
+        self.timestamp_space_btn.setEnabled(False)
 
     def handle_line_drawn(self, p1, p2):
         if self.current_frame is None:
@@ -331,6 +343,59 @@ class MainWindow(QMainWindow):
             self.draw_btn.setText("Lỗi! Vẽ lại đi")
             self.draw_btn.setEnabled(True)
 
+    def handle_timestamp_space_drawn(self, p1, p2):
+        if self.current_frame is None:
+            return
+        h, w = self.current_frame.shape[:2]
+
+        pixmap = self.video_label.pixmap()
+        if pixmap and not pixmap.isNull():
+            pm_w, pm_h = pixmap.width(), pixmap.height()
+            label_w = self.video_label.width()
+            label_h = self.video_label.height()
+            offset_x = (label_w - pm_w) / 2
+            offset_y = (label_h - pm_h) / 2
+            p1_adj = (p1[0] - offset_x, p1[1] - offset_y)
+            p2_adj = (p2[0] - offset_x, p2[1] - offset_y)
+            display_size = (pm_w, pm_h)
+        else:
+            p1_adj, p2_adj = p1, p2
+            display_size = (self.video_label.width(), self.video_label.height())
+
+        # Scale UI -> image coords
+        img_w, img_h = w, h
+        scale = min(display_size[0] / img_w, display_size[1] / img_h)
+        if scale <= 0:
+            return
+
+        x1 = int(p1_adj[0] / scale)
+        y1 = int(p1_adj[1] / scale)
+        x2 = int(p2_adj[0] / scale)
+        y2 = int(p2_adj[1] / scale)
+        x1, x2 = sorted((max(0, x1), min(img_w - 1, x2)))
+        y1, y2 = sorted((max(0, y1), min(img_h - 1, y2)))
+        if x2 <= x1 or y2 <= y1:
+            self.timestamp_space_btn.setText("Lỗi! Vẽ lại")
+            self.timestamp_space_btn.setEnabled(True)
+            return
+
+        # Lưu Timestamp space theo tỉ lệ ảnh gốc
+        self.timestamp_space_rel = (x1 / img_w, y1 / img_h, (x2 - x1) / img_w, (y2 - y1) / img_h)
+        try:
+            import configs.settings as settings
+            settings.TIMESTAMP_SPACE_REL = self.timestamp_space_rel
+            settings.TIMESTAMP_SPACE_ROI_PATH.parent.mkdir(parents=True, exist_ok=True)
+            settings.TIMESTAMP_SPACE_ROI_PATH.write_text(
+                json.dumps({'rel': self.timestamp_space_rel}), encoding='utf-8'
+            )
+        except Exception:
+            pass
+
+        self.timestamp_space_btn.setText("Vẽ Timestamp space")
+        self.timestamp_space_btn.setEnabled(True)
+        # Refresh preview
+        self.update_image(self.current_frame.copy())
+
     def start_processing(self):
         if not self.current_video_path:
             return
@@ -344,6 +409,7 @@ class MainWindow(QMainWindow):
                 return
 
         self._cleanup_threads()
+        self._update_ui_target_size()
         self._set_ui_running(True)
         self.result_table.setRowCount(0)
 
@@ -375,7 +441,13 @@ class MainWindow(QMainWindow):
         # 2. Dừng extraction thread (producer)
         if self.extraction_thread:
             self.extraction_thread.is_running = False
-            self.extraction_thread = None
+
+        # 2.1. Đẩy sentinel để AI thread thoát ngay (tránh treo/crash)
+        if self.frame_queue:
+            try:
+                self.frame_queue.put(None, timeout=1)
+            except Exception:
+                pass
 
         # 3. Reset UI ngay — không đợi compile video
         self._set_ui_running(False)
@@ -410,9 +482,18 @@ class MainWindow(QMainWindow):
 
     def update_image(self, cv_img):
         """Đảnh Hiển thị frame, vẽ vạch ảo nếu có."""
+        self._update_ui_target_size()
         if self.virtual_line:
             line = self._scale_line_to_frame(cv_img)
             draw_line_with_arrows(cv_img, line)
+        if self.timestamp_space_rel:
+            h, w = cv_img.shape[:2]
+            x, y, rw, rh = self.timestamp_space_rel
+            x1 = int(x * w)
+            y1 = int(y * h)
+            x2 = int((x + rw) * w)
+            y2 = int((y + rh) * h)
+            cv2.rectangle(cv_img, (x1, y1), (x2, y2), (0, 255, 255), 2)
         self.video_label.setPixmap(convert_cv_to_qt(cv_img))
 
     def update_counter_table(self, count_nhap, count_xuat):
@@ -426,6 +507,11 @@ class MainWindow(QMainWindow):
             self.result_table.setItem(row, 1, QTableWidgetItem(str(count_nhap.get(label, 0))))
             self.result_table.setItem(row, 2, QTableWidgetItem(str(count_xuat.get(label, 0))))
 
+    def update_fps(self, fps_value):
+        """Cập nhật FPS realtime trên UI."""
+        if hasattr(self, "fps_label"):
+            self.fps_label.setText(f"FPS: {fps_value:.1f}")
+
     # ===== SETTINGS =====
 
     def change_fps(self, value):
@@ -438,7 +524,7 @@ class MainWindow(QMainWindow):
             self.extraction_thread.set_resolution(width)
 
     def change_conf(self, value):
-        self.ai_service.detector.conf = value
+        self.ai_service.set_conf(value)
 
     # ===== PRIVATE =====
 
@@ -450,6 +536,7 @@ class MainWindow(QMainWindow):
         self.camera_btn.setEnabled(not running)
         self.draw_btn.setEnabled(not running)
         self.rotate_btn.setEnabled(not running)
+        self.timestamp_space_btn.setEnabled(not running)
         self.pause_btn.setEnabled(running)
         self.pause_btn.setText("Tạm dừng")
         self.stop_btn.setEnabled(running)
@@ -531,6 +618,31 @@ class MainWindow(QMainWindow):
         self.video_thread = None
         self.frame_queue = None
 
+    def _update_ui_target_size(self):
+        """C?p nh?t k?ch th??c hi?n th? m?c ti?u ?? scale overlay ?n ??nh."""
+        try:
+            import configs.settings as settings
+            w = max(1, self.video_label.width())
+            h = max(1, self.video_label.height())
+            settings.UI_TARGET_WIDTH = w
+            settings.UI_TARGET_HEIGHT = h
+        except Exception:
+            pass
+
+    def _load_timestamp_space_roi(self):
+        """Load timestamp space ROI t? file n?u c?."""
+        try:
+            import configs.settings as settings
+            path = settings.TIMESTAMP_SPACE_ROI_PATH
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                rel = data.get("rel")
+                if isinstance(rel, (list, tuple)) and len(rel) == 4:
+                    self.timestamp_space_rel = tuple(float(x) for x in rel)
+                    settings.TIMESTAMP_SPACE_REL = self.timestamp_space_rel
+        except Exception:
+            pass
+
     def closeEvent(self, event):
         self._cleanup_threads()
         event.accept()
@@ -542,3 +654,7 @@ def _rotate_frame(frame, angle):
     """Xoay frame theo góc (0/90/180/270). Dùng ROTATION_MAP chung."""
     rotation = ROTATION_MAP.get(angle)
     return cv2.rotate(frame, rotation) if rotation is not None else frame
+    def change_resolution(self, text):
+        width = int(text) if text.isdigit() else 0
+        if self.extraction_thread:
+            self.extraction_thread.set_resolution(width)

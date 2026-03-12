@@ -43,6 +43,9 @@ class QtDisplayAdapter(QObject):
     # Signal gửi kết quả đếm (2 dict: nhập, xuất) về UI
     count_signal = pyqtSignal(dict, dict)
 
+    # Signal gửi FPS realtime về UI
+    fps_signal = pyqtSignal(float)
+
     def show(self, frame):
         """Gửi frame đã annotate về UI để hiển thị."""
         if frame is not None:
@@ -53,12 +56,19 @@ class QtDisplayAdapter(QObject):
         """Gửi số liệu đếm về UI để cập nhật bảng."""
         self.count_signal.emit(count_nhap, count_xuat)
 
+    def emit_fps(self, fps_value):
+        """Gửi FPS realtime về UI."""
+        try:
+            self.fps_signal.emit(float(fps_value))
+        except Exception:
+            pass
+
     def close(self):
         """Dọn dẹp (hiện tại không cần làm gì)."""
         pass
 
 
-def convert_cv_to_qt(cv_img, target_width=800, target_height=600):
+def convert_cv_to_qt(cv_img, target_width=None, target_height=None):
     """
     Chuyển ảnh OpenCV (BGR numpy) -> QPixmap (RGB) để hiển thị trên QLabel.
 
@@ -75,6 +85,14 @@ def convert_cv_to_qt(cv_img, target_width=800, target_height=600):
     # .copy() quan trọng: QImage chỉ tham chiếu rgb.data, không copy.
     # Nếu rgb bị garbage collect trước khi QPixmap tạo xong -> crash.
     qt_img = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
+
+    if target_width is None or target_height is None:
+        try:
+            import configs.settings as settings
+            target_width = getattr(settings, "UI_TARGET_WIDTH", 800)
+            target_height = getattr(settings, "UI_TARGET_HEIGHT", 600)
+        except Exception:
+            target_width, target_height = 800, 600
 
     if target_width and target_height:
         scaled = qt_img.scaled(

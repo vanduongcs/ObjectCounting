@@ -34,6 +34,9 @@ def main():
 
     # Bước 2: Tạo AI Service -- nạp model YOLO + OpenVINO
     ai_service = AIService(settings.MODEL_PATH, display_handler=adapter)
+    print("[Startup] Dang warmup model truoc khi hien thi giao dien...")
+    ai_service.preload_detector()
+    print("[Startup] Warmup hoan tat. Dang mo giao dien...")
 
     # Bước 3: Tạo UI -- nhận AIService để điều khiển, adapter để nhận kết quả
     window = MainWindow(ai_service, adapter)

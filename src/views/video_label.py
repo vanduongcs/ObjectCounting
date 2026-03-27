@@ -1,24 +1,10 @@
-"""
-Video Label: Widget hiển thị video, hỗ trợ vẽ vạch ảo bằng chuột.
-
-Ai gọi module này?
-    - MainWindow._build_ui() tạo VideoLabel và đặt vào layout.
-    - MainWindow.update_image() gọi setPixmap() để hiển thị frame.
-    - MainWindow.start_drawing_line() gọi enable_drawing(True).
-
-Module này gọi ai?
-    - Emit line_drawn_signal(p1, p2) -> MainWindow.handle_line_drawn() xử lý.
-
-Luồng vẽ vạch ảo:
-    User bấm "Vẽ vạch ảo" -> enable_drawing(True)
-    User kéo chuột        -> paintEvent vẽ đường dash vàng
-    User thả chuột        -> emit line_drawn_signal(p1, p2)
-    MainWindow             -> calculate_virtual_line() -> lưu vạch ảo
-"""
+"""Video preview widget with line/ROI drawing support."""
 
 from PyQt6.QtWidgets import QLabel
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPainter, QPen
+
+import configs.settings_interface as ui_settings
 
 
 class VideoLabel(QLabel):
@@ -32,27 +18,39 @@ class VideoLabel(QLabel):
         self.current_point = None
 
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setStyleSheet("background-color: #222; color: #EEE; font-size: 20px;")
-        self.setMinimumSize(800, 600)
+        self.setObjectName("videoCanvas")
+        self.setMinimumSize(
+            ui_settings.VIDEO_CANVAS_MIN_WIDTH,
+            ui_settings.VIDEO_CANVAS_MIN_HEIGHT,
+        )
+        self.setMouseTracking(True)
 
     def enable_drawing(self, enable=True, mode="line"):
         self.drawing_mode = mode if enable else None
-        if enable:
-            self.start_point = None
-            self.current_point = None
+        self._reset_drawing()
+        self.setCursor(
+            Qt.CursorShape.CrossCursor if enable else Qt.CursorShape.ArrowCursor
+        )
+        self.update()
 
-    # --- Mouse Events ---
+    def _reset_drawing(self):
+        self.start_point = None
+        self.current_point = None
 
     def mousePressEvent(self, event):
         if self.drawing_mode and event.button() == Qt.MouseButton.LeftButton:
             self.start_point = event.pos()
             self.current_point = event.pos()
             self.update()
+            return
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if self.drawing_mode and self.start_point:
             self.current_point = event.pos()
             self.update()
+            return
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if self.drawing_mode and event.button() == Qt.MouseButton.LeftButton:
@@ -66,21 +64,27 @@ class VideoLabel(QLabel):
                     self.line_drawn_signal.emit(p1, p2)
 
             self.drawing_mode = None
-            self.start_point = None
-            self.current_point = None
+            self._reset_drawing()
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             self.update()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _draw_preview_shape(self, painter):
+        pen = QPen(Qt.GlobalColor.yellow, 2, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        if self.drawing_mode == "roi":
+            x1 = self.start_point.x()
+            y1 = self.start_point.y()
+            x2 = self.current_point.x()
+            y2 = self.current_point.y()
+            painter.drawRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+            return
+        painter.drawLine(self.start_point, self.current_point)
 
     def paintEvent(self, event):
         super().paintEvent(event)
         if self.drawing_mode and self.start_point and self.current_point:
             painter = QPainter(self)
-            painter.setPen(QPen(Qt.GlobalColor.yellow, 2, Qt.PenStyle.DashLine))
-            if self.drawing_mode == "roi":
-                x1 = self.start_point.x()
-                y1 = self.start_point.y()
-                x2 = self.current_point.x()
-                y2 = self.current_point.y()
-                painter.drawRect(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
-            else:
-                painter.drawLine(self.start_point, self.current_point)
+            self._draw_preview_shape(painter)
             painter.end()

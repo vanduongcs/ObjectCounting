@@ -1,196 +1,262 @@
 """
-Export Excel: Xuất dữ liệu đếm nhập/xuất ra file Excel nhiều sheet.
+Export Excel helpers.
 
-Ai gọi module này?
-    - MainWindow.export_data() (views/main_window.py) khi user bấm "Xuất Excel".
-
-Dữ liệu đến từ đâu?
-    - MainWindow.latest_counts_nhap / latest_counts_xuat — tổng đếm
-    - AIService.last_event_log — danh sách sự kiện chi tiết
-
-Cấu trúc file Excel:
-    Sheet "Tổng hợp": Tên hàng hóa | Số lượng
-    Sheet "<tên hàng>": Hành động | Thời gian  (mỗi loại hàng 1 sheet)
+Workbook layout:
+- Tong hop: one row per label
+- <label>: two side-by-side sections for Nhap and Xuat events
 """
 
 import os
 import re
+import tempfile
+from datetime import datetime
 
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, Border, Side
-
-try:
-    import cv2
-except Exception:
-    cv2 = None
-
-try:
-    import pytesseract
-except Exception:
-    pytesseract = None
+from openpyxl.styles import Border, Font, PatternFill, Side
 
 import configs.settings as settings
 
-_TESS_READY = None
+_INVALID_SHEET_CHARS_RE = re.compile(r"[\[\]:*?/\\]")
 
 
-def _ensure_tesseract():
-    global _TESS_READY
-    if _TESS_READY is not None:
-        return _TESS_READY
-    if pytesseract is None or cv2 is None:
-        _TESS_READY = False
-        return False
-    tcmd = getattr(settings, "TESSERACT_CMD", "") or ""
-    if tcmd and os.path.exists(tcmd):
+def _normalize_counts(counts):
+    if not isinstance(counts, dict):
+        return {}
+    normalized = {}
+    for label, value in counts.items():
+        key = str(label)
         try:
-            pytesseract.pytesseract.tesseract_cmd = tcmd
-            _TESS_READY = True
-            return True
+            normalized[key] = int(value)
         except Exception:
-            _TESS_READY = False
-            return False
-    default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    if os.path.exists(default_path):
-        try:
-            pytesseract.pytesseract.tesseract_cmd = default_path
-        except Exception:
-            pass
-    _TESS_READY = True
-    return True
+            try:
+                normalized[key] = int(float(value))
+            except Exception:
+                normalized[key] = 0
+    return normalized
 
 
-def _ocr_timestamp_from_image(image_path):
-    if not settings.TIMESTAMP_OCR_ENABLED:
+def _normalize_event_log(event_log):
+    if not isinstance(event_log, list):
+        return []
+    normalized = []
+    for evt in event_log:
+        if not isinstance(evt, dict):
+            continue
+        normalized.append({
+            "label": str(evt.get("label", "")),
+            "action": str(evt.get("action", "")),
+            "timestamp": evt.get("timestamp", ""),
+        })
+    return normalized
+
+
+def _make_sheet_name(label, used_names):
+    base = _INVALID_SHEET_CHARS_RE.sub("_", str(label)).strip() or "Unknown"
+    base = base[:31]
+    if base.lower() not in used_names:
+        used_names.add(base.lower())
+        return base
+
+    idx = 2
+    while True:
+        suffix = f"_{idx}"
+        candidate = f"{base[:31 - len(suffix)]}{suffix}"
+        if candidate.lower() not in used_names:
+            used_names.add(candidate.lower())
+            return candidate
+        idx += 1
+
+
+def _extract_frame_index(path):
+    base = os.path.basename(path or "")
+    match = re.search(r"_(\d{8})\.jpg$", base)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except Exception:
+        return None
+
+
+def _frame_index_to_video_time(frame_idx, fps=None):
+    fps_value = float(fps) if fps and fps > 0 else float(getattr(settings, "DEFAULT_VIDEO_FPS", 25))
+    if frame_idx is None or fps_value <= 0:
         return ""
-    if not _ensure_tesseract():
+    total_seconds = int(frame_idx / fps_value)
+    h = total_seconds // 3600
+    m = (total_seconds % 3600) // 60
+    s = total_seconds % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def _normalize_export_path(filepath):
+    path = os.path.abspath(str(filepath or "").strip())
+    if not path:
         return ""
-    if not os.path.exists(image_path):
-        return ""
-    img = cv2.imread(image_path)
-    if img is None:
-        return ""
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    gray = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_LINEAR)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
-    _, th1 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    _, th2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    if not path.lower().endswith(".xlsx"):
+        path += ".xlsx"
+    return path
 
-    config = f"--psm 7 -c tessedit_char_whitelist={settings.TIMESTAMP_OCR_WHITELIST}"
 
-    def _run_ocr(img_in):
-        txt = pytesseract.image_to_string(img_in, lang=settings.TIMESTAMP_OCR_LANG, config=config)
-        txt = re.sub(r"[^0-9:/\\- ]+", " ", txt)
-        txt = re.sub(r"\s+", " ", txt).strip()
-        return txt
+def _build_fallback_export_path(filepath):
+    base, ext = os.path.splitext(filepath)
+    ext = ext or ".xlsx"
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    candidate = f"{base}_{stamp}{ext}"
+    idx = 2
+    while os.path.exists(candidate):
+        candidate = f"{base}_{stamp}_{idx}{ext}"
+        idx += 1
+    return candidate
 
-    texts = [_run_ocr(th1), _run_ocr(th2)]
-    pattern = settings.TIMESTAMP_OCR_REGEX
-    for t in texts:
-        m = re.search(pattern, t)
-        if m:
-            date_m = re.search(r"\d{2}[-/]\d{2}[-/]\d{4}", m.group(0))
-            time_m = re.search(r"\d{2}:\d{2}:\d{2}", m.group(0))
-            if date_m and time_m:
-                return f"{date_m.group(0)} {time_m.group(0)}"
-            return m.group(0)
 
-    for t in texts:
-        date_m = re.search(r"\d{2}[-/]\d{2}[-/]\d{4}", t)
-        time_m = re.search(r"\d{2}:\d{2}:\d{2}", t)
-        if date_m and time_m:
-            return f"{date_m.group(0)} {time_m.group(0)}"
-    return ""
+def _normalize_timestamp(value):
+    if isinstance(value, str) and value and os.path.exists(value):
+        return _frame_index_to_video_time(_extract_frame_index(value))
+    return str(value) if value is not None else ""
+
+
+def _split_events_by_action(event_log, label):
+    nhap_rows = []
+    xuat_rows = []
+    for evt in event_log:
+        if evt.get("label") != label:
+            continue
+        row = [evt.get("timestamp", "")]
+        action = str(evt.get("action", "")).lower()
+        if "nh" in action:
+            nhap_rows.append(row)
+        elif "xu" in action:
+            xuat_rows.append(row)
+    return nhap_rows, xuat_rows
+
+
+def _collect_all_labels(count_nhap, count_xuat, event_log):
+    labels = set(count_nhap.keys()) | set(count_xuat.keys())
+    for evt in event_log:
+        label = str(evt.get("label", "")).strip()
+        if label:
+            labels.add(label)
+    return sorted(labels)
+
+
+def _style_header_row(ws, row_idx, start_col, end_col, fill_color=None):
+    header_font = Font(bold=True, size=11)
+    thin_border = Border(bottom=Side(style="thin", color="999999"))
+    fill = PatternFill("solid", fgColor=fill_color) if fill_color else None
+    for col_idx in range(start_col, end_col + 1):
+        cell = ws.cell(row=row_idx, column=col_idx)
+        cell.font = header_font
+        cell.border = thin_border
+        if fill is not None:
+            cell.fill = fill
 
 
 def export_to_excel(filepath, count_nhap, count_xuat, event_log=None):
     """
-    Xuất dữ liệu đếm ra file Excel nhiều sheet.
-
-    Args:
-        filepath: Đường dẫn file .xlsx (do user chọn qua dialog).
-        count_nhap: dict {tên_loại: số_lượng_nhập}
-        count_xuat: dict {tên_loại: số_lượng_xuất}
-        event_log: list[dict] — [{label, action, timestamp}, ...]
+    Export current net counts and event log into Excel.
 
     Returns:
         (success: bool, message: str)
     """
-    if event_log is None:
-        event_log = []
-
-    all_labels = sorted(set(count_nhap.keys()) | set(count_xuat.keys()))
-
-    # Preprocess event_log: OCR timestamp images if needed
-    processed_events = []
-    ocr_cache = {}
-    for evt in event_log:
-        ts = evt.get("timestamp", "")
-        if isinstance(ts, str) and os.path.exists(ts):
-            if ts not in ocr_cache:
-                text = _ocr_timestamp_from_image(ts)
-                ocr_cache[ts] = text if text else ts
-            ts_out = ocr_cache[ts]
-        else:
-            ts_out = ts
-        processed_events.append({
-            "label": evt.get("label"),
-            "action": evt.get("action"),
-            "timestamp": ts_out,
-        })
-
+    tmp_path = ""
     try:
+        filepath = _normalize_export_path(filepath)
+        if not filepath:
+            return False, "Loi xuat file: Duong dan file khong hop le."
+
+        target_dir = os.path.dirname(filepath) or os.getcwd()
+        os.makedirs(target_dir, exist_ok=True)
+
+        count_nhap = _normalize_counts(count_nhap)
+        count_xuat = _normalize_counts(count_xuat)
+        event_log = _normalize_event_log(event_log)
+        processed_events = []
+        for evt in event_log:
+            processed_events.append({
+                "label": evt.get("label", ""),
+                "action": evt.get("action", ""),
+                "timestamp": _normalize_timestamp(evt.get("timestamp", "")),
+            })
+        all_labels = _collect_all_labels(count_nhap, count_xuat, processed_events)
+
         wb = Workbook()
 
-        # ===== Sheet 1: Tổng hợp =====
         ws_summary = wb.active
-        ws_summary.title = "Tổng hợp"
+        ws_summary.title = "Tong hop"
+        used_sheet_names = {ws_summary.title.lower()}
 
-        # Header
-        header_font = Font(bold=True, size=11)
-        thin_border = Border(
-            bottom=Side(style="thin", color="999999"),
-        )
-
-        ws_summary.append(["Tên hàng hóa", "Số lượng nhập", "Số lượng xuất"])
-        for cell in ws_summary[1]:
-            cell.font = header_font
-            cell.border = thin_border
-
-        # Data
+        ws_summary.append(["Loai", "Nhap hien tai", "Xuat hien tai"])
+        _style_header_row(ws_summary, 1, 1, 3, fill_color="D9EAF7")
         for label in all_labels:
             ws_summary.append([
                 label,
                 count_nhap.get(label, 0),
                 count_xuat.get(label, 0),
             ])
+        ws_summary.column_dimensions["A"].width = 22
+        ws_summary.column_dimensions["B"].width = 16
+        ws_summary.column_dimensions["C"].width = 16
 
-        # Auto-width
-        ws_summary.column_dimensions["A"].width = 20
-        ws_summary.column_dimensions["B"].width = 15
-        ws_summary.column_dimensions["C"].width = 15
-
-        # ===== Sheet per-product: chi tiết sự kiện =====
         for label in all_labels:
-            # Tên sheet giới hạn 31 ký tự (Excel limit)
-            sheet_name = label[:31]
+            sheet_name = _make_sheet_name(label, used_sheet_names)
             ws = wb.create_sheet(title=sheet_name)
 
-            ws.append(["Hành động", "Thời gian"])
-            for cell in ws[1]:
-                cell.font = header_font
-                cell.border = thin_border
+            nhap_rows, xuat_rows = _split_events_by_action(processed_events, label)
 
-            # Filter events cho label này
-            for evt in processed_events:
-                if evt["label"] == label:
-                    ws.append([evt["action"], evt["timestamp"]])
+            ws["A1"] = "Nhap"
+            ws["C1"] = "Xuat"
+            _style_header_row(ws, 1, 1, 1, fill_color="E2F0D9")
+            _style_header_row(ws, 1, 3, 3, fill_color="FCE4D6")
 
-            ws.column_dimensions["A"].width = 12
-            ws.column_dimensions["B"].width = 12
+            ws["A2"] = "Thoi gian"
+            ws["C2"] = "Thoi gian"
+            _style_header_row(ws, 2, 1, 1)
+            _style_header_row(ws, 2, 3, 3)
 
-        wb.save(filepath)
-        return True, "Xuất file thành công!"
+            row_count = max(len(nhap_rows), len(xuat_rows), 1)
+            for idx in range(row_count):
+                if idx < len(nhap_rows):
+                    ws.cell(row=idx + 3, column=1, value=nhap_rows[idx][0])
+                if idx < len(xuat_rows):
+                    ws.cell(row=idx + 3, column=3, value=xuat_rows[idx][0])
 
+            ws.column_dimensions["A"].width = 22
+            ws.column_dimensions["B"].width = 4
+            ws.column_dimensions["C"].width = 22
+
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            prefix="._excel_export_",
+            suffix=".xlsx",
+            dir=target_dir,
+        )
+        os.close(tmp_fd)
+        wb.save(tmp_path)
+        wb.close()
+
+        try:
+            os.replace(tmp_path, filepath)
+            tmp_path = ""
+            return True, f"Xuat file thanh cong:\n{filepath}"
+        except PermissionError:
+            fallback_path = _build_fallback_export_path(filepath)
+            os.replace(tmp_path, fallback_path)
+            tmp_path = ""
+            return True, (
+                "File dich dang duoc mo hoac dang bi khoa.\n"
+                f"Da luu sang file khac:\n{fallback_path}"
+            )
+
+    except PermissionError:
+        return False, (
+            "Loi xuat file: Khong co quyen ghi hoac file dang bi ung dung khac khoa.\n"
+            f"Duong dan: {filepath}"
+        )
     except Exception as e:
-        return False, f"Lỗi xuất file: {str(e)}"
+        return False, f"Loi xuat file: {str(e)}"
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass

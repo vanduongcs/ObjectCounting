@@ -35,6 +35,7 @@ CACHE_DIR = BASE_DIR / "data" / "cache"            # Frame annotated tạm
 OUTPUT_DIR = BASE_DIR / "data" / "output"           # Video output đã xử lý
 SNAPSHOT_DIR = BASE_DIR / "data" / "cache_processed"  # Ảnh lưu khi có sự kiện đếm
 DB_PATH = BASE_DIR / "data" / "history.db"          # SQLite database
+WINDOW_STATE_PATH = BASE_DIR / "data" / "window_state.json"
 CACHE_IMAGE_QUALITY = 85                            # JPEG quality (0-100)
 OUTPUT_VIDEO_FPS = 30                               # FPS cho video output
 
@@ -98,27 +99,17 @@ REALTIME_DROP_FRAMES = True
 # UI / DRAWING (vẽ overlay)
 # ═══════════════════════════════════════════════════════════════════════
 
-# Độ trong suốt overlay vùng Nhập/Xuất (0.0 = hoàn toàn trong suốt)
-LINE_OVERLAY_ALPHA = 0.1
-
-# Màu và độ dày vạch ảo trên ảnh (BGR format)
-LINE_COLOR = (0, 0, 255)     # Đỏ
-LINE_THICKNESS = 2
-
-# Kích thước hiển thị mục tiêu (dùng để scale overlay khi resize UI)
-UI_TARGET_WIDTH = 800
-UI_TARGET_HEIGHT = 600
-UI_BASE_FONT_SCALE = 0.7
-UI_BASE_TEXT_THICKNESS = 2
-UI_BASE_BOX_THICKNESS = 2
-UI_BASE_ARROW_LEN = 50
+# UI and drawing tuning were moved to configs/settings_interface.py
 
 # Timestamp space (crop góc trái)
 TIMESTAMP_SPACE_ENABLED = True
 # ROI theo tỉ lệ ảnh gốc: (x, y, w, h)
-TIMESTAMP_SPACE_REL = (0.0, 0.0, 0.35, 0.08)
+DEFAULT_TIMESTAMP_SPACE_REL = (0.0, 0.0, 0.35, 0.08)
+TIMESTAMP_SPACE_REL = DEFAULT_TIMESTAMP_SPACE_REL
 TIMESTAMP_SPACE_DIR = BASE_DIR / "data" / "timestamp_space"
 TIMESTAMP_SPACE_ROI_PATH = TIMESTAMP_SPACE_DIR / "roi.json"
+TIMESTAMP_SPACE_SESSION_ROOT = TIMESTAMP_SPACE_DIR / "sessions"
+VIRTUAL_LINE_PATH = BASE_DIR / "data" / "virtual_line.json"
 
 # OCR after stop (video only)
 TIMESTAMP_OCR_ENABLED = True
@@ -126,3 +117,24 @@ TIMESTAMP_OCR_LANG = "eng"
 TIMESTAMP_OCR_WHITELIST = "0123456789:-/ "
 TIMESTAMP_OCR_REGEX = r"\d{2}[-/]\d{2}[-/]\d{4}.*?\d{2}:\d{2}:\d{2}"
 TESSERACT_CMD = ""
+
+# Tracklet stitching (ByteTrack bridge)
+TRACKLET_ENABLED = True
+TRACKLET_MAX_LOST_FRAMES = 18
+TRACKLET_MIN_OBSERVE_FRAMES = 3
+TRACKLET_MAX_LOST_TRACKS = 200
+TRACKLET_IOU_THRESHOLD = 0.30
+TRACKLET_MAX_DISTANCE_PIXELS = 90
+TRACKLET_MAX_DISTANCE_RATIO = 0.05
+TRACKLET_SIZE_RATIO_MIN = 0.5
+TRACKLET_SIZE_RATIO_MAX = 2.0
+TRACKLET_REMAP_TTL = 60
+TRACKLET_MISSING_TO_LOST = 2
+TRACKLET_REMAP_COOLDOWN = 10
+TRACKLET_DIRECTION_MIN_COS = 0.15
+TRACKLET_MIN_SPEED_FOR_DIRECTION = 6.0
+TRACKLET_MIN_CONFIDENCE = 0.20
+
+# Video playback sync (file): drop frames to keep 1s display ~= 1s video
+VIDEO_REALTIME_SYNC = True
+VIDEO_REALTIME_MAX_LAG_SEC = 0.5

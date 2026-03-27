@@ -27,7 +27,7 @@ Hoặc chạy file `run.bat` (Windows).
 1. **Chọn video** hoặc **Kết nối camera** (hỗ trợ RTSP/HTTP stream)
 2. **Vẽ vạch ảo** — kéo chuột trên video để vẽ đường đếm
 3. **Bắt đầu** — ứng dụng sẽ detect + track + đếm đối tượng qua vạch
-4. **Xuất CSV** — lưu kết quả đếm ra file
+4. **Xuất Excel** — lưu kết quả đếm ra file `.xlsx`
 
 ## Kiến trúc
 

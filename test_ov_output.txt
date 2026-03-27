@@ -1,6 +1,0 @@
---- Standalone Predict (no imgsz) ---
-Boxes: 7
---- Standalone Predict (imgsz=1280) ---
-Boxes: 7
---- Track with persist=True (imgsz=1280) ---
-Boxes: 7

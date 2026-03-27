@@ -27,6 +27,8 @@ import numpy as np
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 
+import configs.settings_interface as ui_settings
+
 
 class QtDisplayAdapter(QObject):
     """
@@ -46,6 +48,9 @@ class QtDisplayAdapter(QObject):
     # Signal gửi FPS realtime về UI
     fps_signal = pyqtSignal(float)
 
+    # Signal báo session/history cần refresh
+    session_signal = pyqtSignal()
+
     def show(self, frame):
         """Gửi frame đã annotate về UI để hiển thị."""
         if frame is not None:
@@ -60,6 +65,13 @@ class QtDisplayAdapter(QObject):
         """Gửi FPS realtime về UI."""
         try:
             self.fps_signal.emit(float(fps_value))
+        except Exception:
+            pass
+
+    def emit_session_refresh(self):
+        """Báo UI refresh lại lịch sử/session."""
+        try:
+            self.session_signal.emit()
         except Exception:
             pass
 
@@ -87,12 +99,8 @@ def convert_cv_to_qt(cv_img, target_width=None, target_height=None):
     qt_img = QImage(rgb.data, w, h, ch * w, QImage.Format.Format_RGB888).copy()
 
     if target_width is None or target_height is None:
-        try:
-            import configs.settings as settings
-            target_width = getattr(settings, "UI_TARGET_WIDTH", 800)
-            target_height = getattr(settings, "UI_TARGET_HEIGHT", 600)
-        except Exception:
-            target_width, target_height = 800, 600
+        target_width = getattr(ui_settings, "UI_TARGET_WIDTH", 800)
+        target_height = getattr(ui_settings, "UI_TARGET_HEIGHT", 600)
 
     if target_width and target_height:
         scaled = qt_img.scaled(

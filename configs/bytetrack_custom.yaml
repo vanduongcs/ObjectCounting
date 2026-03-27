@@ -6,9 +6,9 @@ tracker_type: bytetrack
 
 # Thresholds — GIỮ NGUYÊN DEFAULT ultralytics
 # Lý do: default đã fine-tune cho cân bằng giữa track quality và noise rejection
-track_high_thresh: 0.25   # Stage 1: detection cần ≥ 0.25 để match trực tiếp
+track_high_thresh: 0.25   # Quay về ngưỡng an toàn hơn để giảm match nhầm
 track_low_thresh: 0.1     # Stage 2: detection 0.1-0.25 được thử match với lost tracks
-new_track_thresh: 0.25    # Detection cần ≥ 0.25 để tạo track MỚI (không sync với DETECTION_CONFIDENCE)
+new_track_thresh: 0.25    # Tránh tạo/ghép track mới quá dễ
 
 # Lifecycle — tùy chỉnh cho ứng dụng đếm
 # track_buffer sẽ bị override bởi _generate_tracker_config(fps) khi chạy
@@ -16,5 +16,5 @@ new_track_thresh: 0.25    # Detection cần ≥ 0.25 để tạo track MỚI (kh
 track_buffer: 30
 
 # Association
-match_thresh: 0.8         # IoU threshold — DEFAULT (0.6 quá thấp gây match nhầm)
+match_thresh: 0.8         # Chặt hơn để giảm đổi ID sai hướng
 fuse_score: true          # Kết hợp confidence + IoU khi matching

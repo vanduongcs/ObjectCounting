@@ -1,7 +1,7 @@
-description: Ultralytics YOLO26s model trained on /content/LV_KHMT_V3-14/data.yaml
+description: Ultralytics YOLO26n model trained on /content/LV_KHMT_V3-15/data.yaml
 author: Ultralytics
-date: '2026-03-11T01:01:17.502376'
-version: 8.4.14
+date: '2026-03-12T10:51:15.113296'
+version: 8.4.21
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com
 stride: 32

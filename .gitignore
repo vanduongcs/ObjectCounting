@@ -1,5 +1,6 @@
 # IDE / OS
 __pycache__/
+**/__pycache__/
 *.pyc
 .vscode/
 .idea/
@@ -7,9 +8,22 @@ __pycache__/
 # Logs / Temp
 kernel.errors.txt
 *.log
+~$*.xlsx
 
 # Test videos ở root
 1.mp4
 
+# Generated outputs / debug artifacts
+*.mp4.xlsx
+debug_*.jpg
+cmp_*.jpg
+check_*.jpg
+test_ov*.txt
+tests/result/*.jpg
+
 # Bỏ qua nội dung các thư mục con trong data
 data/*/*
+data/cache/
+data/cache_processed/
+data/output/
+data/timestamp_space/

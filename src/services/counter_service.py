@@ -67,6 +67,25 @@ class CounterService:
         # LRU tracking
         self._last_seen_frame = {}
 
+    def _apply_count_action(self, label, action):
+        """Apply net unmatched counts: opposite direction cancels first."""
+        if action == "Nhập":
+            if self.count_xuat.get(label, 0) > 0:
+                self.count_xuat[label] -= 1
+                if self.count_xuat[label] <= 0:
+                    self.count_xuat.pop(label, None)
+            else:
+                self.count_nhap[label] = self.count_nhap.get(label, 0) + 1
+            return
+
+        if action == "Xuất":
+            if self.count_nhap.get(label, 0) > 0:
+                self.count_nhap[label] -= 1
+                if self.count_nhap[label] <= 0:
+                    self.count_nhap.pop(label, None)
+            else:
+                self.count_xuat[label] = self.count_xuat.get(label, 0) + 1
+
     def _get_side(self, cx, cy):
         """
         Xác định vật ở bên nào vạch dựa trên cross product.
@@ -153,13 +172,12 @@ class CounterService:
             # Đếm
             action = None
             if confirmed_side == "NHAP" and current_side == "XUAT":
-                self.count_xuat[label] = self.count_xuat.get(label, 0) + 1
                 action = "Xuất"
             elif confirmed_side == "XUAT" and current_side == "NHAP":
-                self.count_nhap[label] = self.count_nhap.get(label, 0) + 1
                 action = "Nhập"
 
             if action:
+                self._apply_count_action(label, action)
                 ts = self._get_timestamp()
                 evt = {
                     "label": label,

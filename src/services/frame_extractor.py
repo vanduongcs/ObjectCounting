@@ -25,6 +25,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 import threading
 
 import configs.settings as settings
+from src.utils.source_utils import is_stream_source
 
 
 # Lookup table cho rotation (export để main_window dùng chung)
@@ -74,7 +75,7 @@ class FrameExtractionThread(QThread):
         Video file: blocking put (đảm bảo mọi frame được xử lý).
         Stream: drop frame cũ nếu queue đầy (real-time).
         """
-        self._is_stream = self.video_path.startswith(("http", "rtsp"))
+        self._is_stream = is_stream_source(self.video_path)
 
         cap = cv2.VideoCapture(self.video_path)
         if self._is_stream:
@@ -82,6 +83,10 @@ class FrameExtractionThread(QThread):
 
         if not cap.isOpened():
             print(f"Cannot open video: {self.video_path}")
+            self.is_running = False
+            self._fps_ready.set()
+            cap.release()
+            self._enqueue_frame(None)
             self.finished_signal.emit()
             return
 
@@ -222,10 +227,3 @@ class FrameExtractionThread(QThread):
                 except queue.Full:
                     continue
 
-    @staticmethod
-    def _sleep_for_fps(fps, start_time):
-        """Sleep vừa đủ để giữ đúng tốc độ FPS (dùng cho stream)."""
-        delay = 1.0 / fps if fps > 0 else 0.04
-        remaining = delay - (time.time() - start_time)
-        if remaining > 0:
-            time.sleep(remaining)
